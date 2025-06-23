@@ -1,10 +1,10 @@
 // backend/index.js
 // Node.js + Express backend for MTG Deck Analyzer with live meta and Scryfall analysis
 
-const express = require("express");
-const cors = require("cors");
-const bodyParser = require("body-parser");
-const fetch = require("node-fetch");
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import fetch from "node-fetch";
 
 const app = express();
 const PORT = 3001;
