@@ -100,5 +100,19 @@ async function analyzeMatchups(deckCards) {
     winConditions,
   };
 }
+async function fetchCardData(cardName) {
+  try {
+    let res = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName)}`);
+    if (!res.ok) {
+      res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cardName)}`);
+    }
+    const data = await res.json();
+    if (data.object === "error") throw new Error(data.details);
+    return data;
+  } catch (err) {
+    console.warn(`Failed to fetch card: ${cardName}`, err.message);
+    return null;
+  }
+}
 
 export { analyzeMatchups };
