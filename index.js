@@ -1,4 +1,4 @@
-import { analyzeMatchups } from "./Enhanced Analysis.js";
+import { analyzeMatchups } from "./analyzeMatchups.js";
 import { fetchMTGGoldfishMeta, fetchScryfallArchetypes, fetchMTGTop8Meta } from "./metaSources.js";
 
 async function fetchMetaDecks() {
