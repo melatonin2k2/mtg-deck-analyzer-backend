@@ -1,13 +1,25 @@
 {
   "name": "mtg-deck-analyzer-backend",
   "version": "1.0.0",
+  "description": "Backend for MTG Deck Analyzer with live meta data scraping and analysis",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [
+    "mtg",
+    "deck",
+    "analyzer",
+    "backend",
+    "express",
+    "scraping"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
     "body-parser": "^1.20.2",
+    "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "node-fetch": "^3.3.1"
