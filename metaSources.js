@@ -1,4 +1,4 @@
-// metaSources.js
+// backend/metaSources.js
 import * as cheerio from "cheerio";
 import fetch from "node-fetch";
 
@@ -107,7 +107,6 @@ async function fetchMTGTop8Meta() {
 
 async function fetchScryfallArchetypes() {
   try {
-    // This is a static example. Ideally, you build or pull a curated archetype DB.
     return [
       {
         name: "Esper Control",
