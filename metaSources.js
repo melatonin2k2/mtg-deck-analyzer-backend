@@ -1,5 +1,4 @@
-// backend/metaSources.js
-
+// metaSources.js
 import fetch from "node-fetch";
 import cheerio from "cheerio";
 
@@ -11,25 +10,25 @@ export async function fetchMTGGoldfishMeta() {
   const $ = cheerio.load(html);
 
   const decks = [];
-  $(".deck-price-paper").each((i, el) => {
-    const name = $(el).closest("tr").find(".deck-price-paper a").text().trim();
-    const cardList = $(el).closest("tr").find(".deck-col-card a").map((i, el) => $(el).text()).get();
+  $("table.table tbody tr").each((_, el) => {
+    const name = $(el).find("td.deck-price-paper a").text().trim();
+    const cardList = $(el).find("td.deck-col-card a").map((_, el) => $(el).text()).get();
     if (name && cardList.length) {
-      decks.push({ name, keyCards: cardList.slice(0, 10) });
+      decks.push({ name, keyCards: cardList.slice(0, 10) }); // top 10 key cards
     }
   });
 
   return decks;
 }
 
-// Fetch Scryfall archetype tags (mocked)
+// Fetch Scryfall archetype catalog
 export async function fetchScryfallArchetypes() {
   const res = await fetch("https://api.scryfall.com/catalog/archetypes");
   const data = await res.json();
-  return data.data.map(name => ({ name, keyCards: [] })); // Needs enrichment
+  return data.data.map(name => ({ name, keyCards: [] })); // placeholder keyCards
 }
 
-// Fetch from MTGTop8 (mocked since it's harder to scrape without CAPTCHA)
+// Mock MTGTop8 meta decks (real scraping needs more complex setup)
 export async function fetchMTGTop8Meta() {
   return [
     { name: "Golgari Midrange", keyCards: ["Glissa Sunslayer", "Virtue of Persistence"] },
