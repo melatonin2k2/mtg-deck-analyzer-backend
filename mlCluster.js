@@ -1,48 +1,45 @@
-// backend/mlCluster.js
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const natural = require("natural");
-const KMeans = require("ml-kmeans");
+// mlCluster.js
+import fs from "fs";
+import path from "path";
+import { analyzeMatchups } from "./analyzeMatchups.js";
+import KMeans from "ml-kmeans";
 
-const TfIdf = natural.TfIdf;
-const tokenizer = new natural.WordTokenizer();
+const CLUSTERS_PATH = path.resolve("learnedArchetypes.json");
 
-/**
- * Tokenizes and vectorizes an array of deck card text strings
- */
-function vectorizeDecks(deckCardTexts) {
-  const tfidf = new TfIdf();
-  deckCardTexts.forEach(text => tfidf.addDocument(tokenizer.tokenize(text)));
+let clusterModel = null;
 
+function flattenProfile(profile) {
+  const colors = ["W", "U", "B", "R", "G"].map(c => profile.colors.includes(c) ? 1 : 0);
+  const curve = Array.from({ length: 7 }, (_, i) => profile.curve[i] || 0);
+  const synergyFlags = ["Prowess", "Sacrifice", "Reanimator", "Cantrip", "Combat Focused"]
+    .map(s => profile.synergies.includes(s) ? 1 : 0);
+  return [...colors, ...curve, ...synergyFlags];
+}
+
+async function learnClusters(decks) {
   const vectors = [];
-  for (let i = 0; i < deckCardTexts.length; i++) {
-    const vector = [];
-    tfidf.listTerms(i).forEach(term => {
-      vector.push(term.tfidf);
+  for (const deck of decks) {
+    const analysis = await analyzeMatchups(deck);
+    const vector = flattenProfile({
+      colors: analysis.colors,
+      curve: analysis.manaCurve,
+      synergies: analysis.synergies,
     });
     vectors.push(vector);
   }
-  return vectors;
+
+  clusterModel = KMeans(vectors, 5);
+  fs.writeFileSync(CLUSTERS_PATH, JSON.stringify(clusterModel, null, 2));
+  return { clusters: clusterModel.centroids };
 }
 
-/**
- * Clusters decks into archetype groups using KMeans
- */
-function clusterDecks(deckCardTexts, k = 4) {
-  const vectors = vectorizeDecks(deckCardTexts);
-  if (vectors.length < k) k = vectors.length;
+function classifyDeck(deckCards) {
+  if (!clusterModel && fs.existsSync(CLUSTERS_PATH)) {
+    const saved = JSON.parse(fs.readFileSync(CLUSTERS_PATH));
+    clusterModel = saved;
+  }
 
-  const paddedVectors = vectors.map(vec => {
-    const maxLen = Math.max(...vectors.map(v => v.length));
-    while (vec.length < maxLen) vec.push(0); // pad with zeros
-    return vec;
-  });
-
-  const result = KMeans(paddedVectors, k);
-  return {
-    clusters: result.clusters,
-    centroids: result.centroids,
-  };
+  return { cluster: clusterModel?.predict?.([flattenProfile(deckCards)])[0] ?? "Unknown" };
 }
 
-export { clusterDecks };
+export { learnClusters, classifyDeck };
