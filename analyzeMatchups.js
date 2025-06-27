@@ -161,4 +161,4 @@ async function analyzeMatchups(deckCards) {
   };
 }
 
-export { analyzeMatchups };
+export { analyzeMatchups, fetchCardData };
