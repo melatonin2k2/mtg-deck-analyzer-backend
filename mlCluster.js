@@ -1,84 +1,88 @@
-// backend/mlCluster.js
 import fs from "fs";
 import path from "path";
-import { analyzeMatchups } from "./analyzeMatchups.js";
 import KMeans from "ml-kmeans";
+
+import { generateMetaProfile } from "./metaSources.js";
+import {
+  getColorIdentity,
+  computeCurve,
+  detectSynergies
+} from "./analyzeMatchups.js";
 
 const CLUSTERS_PATH = path.resolve("learnedArchetypes.json");
 
 let clusterModel = null;
 
+/**
+ * Convert a profile into a vector for clustering:
+ * - Colors: 5 binary values (W, U, B, R, G)
+ * - Curve: CMC 0-6 bins (7 numbers)
+ * - Synergies: 6 known flags
+ */
 function flattenProfile(profile) {
-  const colors = ["W", "U", "B", "R", "G"].map(c => profile.colors.includes(c) ? 1 : 0);
-  const curve = Array.from({ length: 7 }, (_, i) => profile.curve[i] || 0);
-  const synergies = ["Prowess", "Sacrifice", "Reanimator", "Cantrip", "Combat Focused"]
-    .map(tag => profile.synergies.includes(tag) ? 1 : 0);
-  return [...colors, ...curve, ...synergies];
+  const colorMap = ["W", "U", "B", "R", "G"];
+  const synergyMap = ["Prowess", "Sacrifice", "Reanimator", "Cantrip", "Combat Focused", "Lifegain"];
+
+  const colorVector = colorMap.map((c) => profile.colors.includes(c) ? 1 : 0);
+  const curveVector = Array.from({ length: 7 }, (_, i) => profile.curve[i] || 0);
+  const synergyVector = synergyMap.map((s) => profile.synergies.includes(s) ? 1 : 0);
+
+  return [...colorVector, ...curveVector, ...synergyVector];
 }
 
 async function learnClusters(decks) {
   const vectors = [];
+  const names = [];
 
   for (const deck of decks) {
-    const analysis = await analyzeMatchups(deck);
-    const vector = flattenProfile({
-      colors: analysis.colors,
-      curve: analysis.manaCurve,
-      synergies: analysis.synergies,
-    });
+    if (!deck.keyCards || deck.keyCards.length === 0) continue;
+
+    const profile = await generateMetaProfile(deck);
+    const vector = flattenProfile(profile);
+
     vectors.push(vector);
+    names.push(deck.name);
   }
 
-  const k = 5; // You can tune this
-  clusterModel = KMeans(vectors, k);
+  clusterModel = KMeans(vectors, 5);
+  const labeledCentroids = clusterModel.centroids.map((centroid, i) => ({
+    id: i,
+    centroid: centroid.centroid,
+    closest: names[clusterModel.clusters[i][0]] || `Cluster ${i}`,
+  }));
 
-  // Save minimal data for restoring predictability
-  const stored = {
-    centroids: clusterModel.centroids.map(c => c.centroid),
-    k
-  };
-
-  fs.writeFileSync(CLUSTERS_PATH, JSON.stringify(stored, null, 2));
-  return { clusters: stored.centroids };
+  fs.writeFileSync(CLUSTERS_PATH, JSON.stringify({ centroids: labeledCentroids }, null, 2));
+  return { clusters: labeledCentroids };
 }
 
-async function classifyDeck(deckCards) {
-  // Rebuild model from saved JSON if not loaded
-  if (!clusterModel) {
-    if (!fs.existsSync(CLUSTERS_PATH)) return { cluster: "Unknown" };
-
-    const saved = JSON.parse(fs.readFileSync(CLUSTERS_PATH, "utf-8"));
+function classifyDeck(deckProfile) {
+  if (!clusterModel && fs.existsSync(CLUSTERS_PATH)) {
+    const saved = JSON.parse(fs.readFileSync(CLUSTERS_PATH, "utf8"));
     clusterModel = {
-      centroids: saved.centroids.map((centroid) => ({ centroid })),
+      centroids: saved.centroids.map(c => ({ centroid: c.centroid })),
       predict: (vectors) => {
-        return vectors.map((vec) => {
+        return vectors.map(vec => {
+          let bestIdx = 0;
           let bestDist = Infinity;
-          let bestIndex = -1;
-          for (let i = 0; i < saved.centroids.length; i++) {
-            const dist = euclidean(vec, saved.centroids[i]);
+          clusterModel.centroids.forEach((c, i) => {
+            const dist = euclideanDistance(c.centroid, vec);
             if (dist < bestDist) {
               bestDist = dist;
-              bestIndex = i;
+              bestIdx = i;
             }
-          }
-          return bestIndex;
+          });
+          return bestIdx;
         });
       }
     };
   }
 
-  const analysis = await analyzeMatchups(deckCards);
-  const vector = flattenProfile({
-    colors: analysis.colors,
-    curve: analysis.manaCurve,
-    synergies: analysis.synergies,
-  });
-
-  const clusterIndex = clusterModel.predict([vector])[0];
-  return { cluster: clusterIndex };
+  const vector = flattenProfile(deckProfile);
+  const clusterId = clusterModel?.predict?.([vector])[0];
+  return { cluster: clusterId ?? "Unknown" };
 }
 
-function euclidean(a, b) {
+function euclideanDistance(a, b) {
   return Math.sqrt(a.reduce((sum, val, i) => sum + (val - b[i]) ** 2, 0));
 }
 
