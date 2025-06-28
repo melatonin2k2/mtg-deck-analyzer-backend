@@ -1,4 +1,3 @@
-// index.js
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
@@ -16,9 +15,21 @@ app.post("/api/analyze-deck", async (req, res) => {
   if (!decklist) return res.status(400).json({ error: "Missing decklist" });
 
   try {
-    const deckCards = decklist.split(/\n/).map(line => line.replace(/^[0-9xX]+\s*/, "").trim()).filter(Boolean);
+    const deckCards = decklist
+      .split(/\n/)
+      .map((line) => line.replace(/^[0-9xX]+\s*/, "").trim())
+      .filter(Boolean);
+
     const analysis = await analyzeMatchups(deckCards);
-    const cluster = classifyDeck(deckCards);
+
+    const profile = {
+      colors: analysis.colors,
+      curve: analysis.manaCurve,
+      synergies: analysis.synergies,
+    };
+
+    const cluster = classifyDeck(profile);
+
     res.json({ ...analysis, learnedCluster: cluster });
   } catch (err) {
     console.error(err);
