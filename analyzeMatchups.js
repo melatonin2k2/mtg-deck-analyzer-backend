@@ -154,48 +154,52 @@ function analyzeCardTypes(cardData) {
 }
 
 function determineArchetype(colors, synergies, curve, cardTypes) {
-  const colorCount = colors.length;
-  const avgCMC = Object.entries(curve.curveDist)
-    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / 
-    Object.values(curve.curveDist).reduce((sum, count) => sum + count, 1);
+  const colorCount = colors ? colors.length : 0;
+  const curveDist = curve ? curve.curveDist : {};
+  const safeCardTypes = cardTypes || {};
+  const safeSynergies = synergies || [];
+  
+  const totalCards = Object.values(curveDist).reduce((sum, count) => sum + count, 0);
+  const avgCMC = totalCards > 0 ? Object.entries(curveDist)
+    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / totalCards : 0;
 
   // Aggro decks: low mana curve, lots of creatures
-  if (avgCMC <= 2.5 && cardTypes.creatures >= cardTypes.instants + cardTypes.sorceries) {
+  if (avgCMC <= 2.5 && safeCardTypes.creatures >= (safeCardTypes.instants + safeCardTypes.sorceries)) {
     if (colorCount === 1) {
-      if (colors.includes("R")) return "Mono-Red Aggro";
-      if (colors.includes("W")) return "Mono-White Aggro";
-      if (colors.includes("G")) return "Mono-Green Stompy";
+      if (colors && colors.includes("R")) return "Mono-Red Aggro";
+      if (colors && colors.includes("W")) return "Mono-White Aggro";
+      if (colors && colors.includes("G")) return "Mono-Green Stompy";
     }
-    if (colors.includes("R") && colors.includes("W")) return "Boros Aggro";
-    if (colors.includes("R") && colors.includes("G")) return "Gruul Aggro";
+    if (colors && colors.includes("R") && colors.includes("W")) return "Boros Aggro";
+    if (colors && colors.includes("R") && colors.includes("G")) return "Gruul Aggro";
     return "Aggro";
   }
 
   // Control decks: high instant/sorcery count, card draw
-  if (cardTypes.instants + cardTypes.sorceries > cardTypes.creatures && 
-      synergies.includes("Card Draw")) {
-    if (colors.includes("U") && colors.includes("W") && colors.includes("B")) {
+  if ((safeCardTypes.instants + safeCardTypes.sorceries) > safeCardTypes.creatures && 
+      safeSynergies.includes("Card Draw")) {
+    if (colors && colors.includes("U") && colors.includes("W") && colors.includes("B")) {
       return "Esper Control";
     }
-    if (colors.includes("U") && colors.includes("W")) return "Azorius Control";
-    if (colors.includes("U") && colors.includes("B")) return "Dimir Control";
+    if (colors && colors.includes("U") && colors.includes("W")) return "Azorius Control";
+    if (colors && colors.includes("U") && colors.includes("B")) return "Dimir Control";
     return "Control";
   }
 
   // Midrange: balanced creatures and spells
-  if (avgCMC >= 2.5 && avgCMC <= 4 && cardTypes.creatures > 0) {
-    if (colors.includes("B") && colors.includes("G")) return "Golgari Midrange";
-    if (colors.includes("R") && colors.includes("G")) return "Gruul Midrange";
+  if (avgCMC >= 2.5 && avgCMC <= 4 && safeCardTypes.creatures > 0) {
+    if (colors && colors.includes("B") && colors.includes("G")) return "Golgari Midrange";
+    if (colors && colors.includes("R") && colors.includes("G")) return "Gruul Midrange";
     return "Midrange";
   }
 
   // Combo/synergy based
-  if (synergies.includes("Graveyard")) return "Graveyard Combo";
-  if (synergies.includes("Artifacts")) return "Artifacts";
-  if (synergies.includes("Lifegain")) return "Lifegain";
+  if (safeSynergies.includes("Graveyard")) return "Graveyard Combo";
+  if (safeSynergies.includes("Artifacts")) return "Artifacts";
+  if (safeSynergies.includes("Lifegain")) return "Lifegain";
 
   // Default classification
-  if (colorCount === 1) return `Mono-${colors[0]} Deck`;
+  if (colorCount === 1 && colors) return `Mono-${colors[0]} Deck`;
   if (colorCount >= 3) return "Multicolor Deck";
   
   return "Unknown Archetype";
@@ -204,18 +208,21 @@ function determineArchetype(colors, synergies, curve, cardTypes) {
 function generateMatchupAnalysis(archetype, colors, synergies) {
   const favorable = [];
   const challenging = [];
+  const safeColors = colors || [];
+  const safeSynergies = synergies || [];
+  const safeArchetype = archetype || "Unknown";
 
   // Simple heuristic-based matchup analysis
-  if (archetype.includes("Aggro")) {
+  if (safeArchetype.includes("Aggro")) {
     favorable.push("Control", "Combo", "Slow Midrange");
     challenging.push("Lifegain", "Fast Aggro", "Removal-Heavy Decks");
-  } else if (archetype.includes("Control")) {
+  } else if (safeArchetype.includes("Control")) {
     favorable.push("Aggro", "Midrange", "Fair Decks");
     challenging.push("Combo", "Fast Combo", "Counterspell Wars");
-  } else if (archetype.includes("Combo")) {
+  } else if (safeArchetype.includes("Combo")) {
     favorable.push("Fair Decks", "Creature-based", "Slow Control");
     challenging.push("Counterspells", "Hand Disruption", "Fast Aggro");
-  } else if (archetype.includes("Midrange")) {
+  } else if (safeArchetype.includes("Midrange")) {
     favorable.push("Aggro", "Some Control");
     challenging.push("Combo", "Faster Midrange", "Card Advantage");
   }
@@ -230,8 +237,9 @@ function generateRecommendations(analysis) {
   recommendations.push(`Your deck appears to be a ${archetype} deck.`);
   
   // Mana curve analysis
-  const totalNonlands = Object.values(manaCurve.curveDist).reduce((sum, count) => sum + count, 0) - (manaCurve.curveDist[0] || 0);
-  const avgCMC = Object.entries(manaCurve.curveDist)
+  const curveDist = manaCurve || {};
+  const totalNonlands = Object.values(curveDist).reduce((sum, count) => sum + count, 0) - (curveDist[0] || 0);
+  const avgCMC = Object.entries(curveDist)
     .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / Math.max(totalNonlands, 1);
 
   recommendations.push(`Your average mana cost is ${avgCMC.toFixed(1)}.`);
@@ -241,23 +249,26 @@ function generateRecommendations(analysis) {
   }
 
   // Card type analysis
-  if (cardTypes.creatures < 8 && archetype.includes("Aggro")) {
+  const safeCardTypes = cardTypes || {};
+  if (safeCardTypes.creatures < 8 && archetype.includes("Aggro")) {
     recommendations.push("Aggro decks typically want 16+ creatures for consistent pressure.");
   }
 
-  if (cardTypes.lands < 20) {
+  if (safeCardTypes.lands < 20) {
     recommendations.push("Consider adding more lands - most decks want 22-26 lands.");
-  } else if (cardTypes.lands > 28) {
+  } else if (safeCardTypes.lands > 28) {
     recommendations.push("You might have too many lands - consider cutting 1-2 for more spells.");
   }
 
   // Synergy recommendations
-  if (synergies.length === 0) {
+  const safeSynergies = synergies || [];
+  if (safeSynergies.length === 0) {
     recommendations.push("Consider focusing on a specific synergy or theme for better consistency.");
   }
 
-  if (matchups.challenging.length > 0) {
-    recommendations.push(`Consider sideboard cards for challenging matchups like ${matchups.challenging.join(", ")}.`);
+  const safeMatchups = matchups || {};
+  if (safeMatchups.challenging && safeMatchups.challenging.length > 0) {
+    recommendations.push(`Consider sideboard cards for challenging matchups like ${safeMatchups.challenging.join(", ")}.`);
   }
 
   return recommendations.join(" ");
@@ -281,6 +292,7 @@ async function analyzeMatchups(deckCards) {
   const validCards = cardData.filter(Boolean);
   console.log(`Successfully fetched data for ${validCards.length} cards`);
 
+  // Safely compute analysis components
   const manaCurve = computeManaCurve(validCards);
   const colors = getColorIdentity(validCards);
   const synergies = detectSynergies(validCards);
@@ -291,14 +303,14 @@ async function analyzeMatchups(deckCards) {
   
   const analysis = {
     archetype,
-    manaCurve: manaCurve.curveDist,
-    colors,
-    synergies,
-    cardTypes,
-    matchups,
-    creatureCount: manaCurve.creatures,
-    spellCount: manaCurve.nonCreatures,
-    landCount: manaCurve.lands
+    manaCurve: manaCurve ? manaCurve.curveDist : {},
+    colors: colors || [],
+    synergies: synergies || [],
+    cardTypes: cardTypes || {},
+    matchups: matchups || { favorable: [], challenging: [] },
+    creatureCount: manaCurve ? manaCurve.creatures : 0,
+    spellCount: manaCurve ? manaCurve.nonCreatures : 0,
+    landCount: manaCurve ? manaCurve.lands : 0
   };
 
   analysis.recommendations = generateRecommendations(analysis);
