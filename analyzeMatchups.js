@@ -1,30 +1,69 @@
 import fetch from "node-fetch";
-import {
-  fetchMTGGoldfishMeta,
-  fetchScryfallArchetypes,
-  fetchMTGTop8Meta,
-} from "./metaSources.js";
 
-function similarityScore(deckA, deckB) {
-  const intersection = deckA.filter((card) => deckB.includes(card));
-  const union = new Set([...deckA, ...deckB]);
-  return intersection.length / union.size; // Jaccard similarity
+// Cache for card data to avoid repeated API calls
+const cardCache = new Map();
+
+async function fetchCardData(cardName) {
+  if (cardCache.has(cardName)) {
+    return cardCache.get(cardName);
+  }
+
+  try {
+    // First try exact match
+    let res = await fetch(
+      `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName)}`
+    );
+    
+    if (!res.ok) {
+      // If exact fails, try fuzzy search
+      res = await fetch(
+        `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cardName)}`
+      );
+    }
+    
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    
+    if (data.object === "error") {
+      throw new Error(data.details || "Card not found");
+    }
+
+    cardCache.set(cardName, data);
+    return data;
+  } catch (err) {
+    console.warn(`Failed to fetch card: ${cardName} - ${err.message}`);
+    cardCache.set(cardName, null);
+    return null;
+  }
 }
 
-function computeCurve(cardData) {
+function computeManaCurve(cardData) {
   const curveDist = {};
   let creatures = 0;
   let nonCreatures = 0;
+  let lands = 0;
 
   cardData.forEach((card) => {
-    if (!card || card.cmc === undefined || !card.type_line) return;
-    const cmc = Math.min(card.cmc, 7); // bucket 7+
+    if (!card) return;
+    
+    const cmc = Math.min(card.cmc || 0, 7); // bucket 7+ mana costs
     curveDist[cmc] = (curveDist[cmc] || 0) + 1;
-    if (card.type_line.includes("Creature")) creatures++;
-    else nonCreatures++;
+    
+    if (card.type_line) {
+      if (card.type_line.includes("Land")) {
+        lands++;
+      } else if (card.type_line.includes("Creature")) {
+        creatures++;
+      } else {
+        nonCreatures++;
+      }
+    }
   });
 
-  return { creatures, nonCreatures, curveDist };
+  return { creatures, nonCreatures, lands, curveDist };
 }
 
 function getColorIdentity(cardData) {
@@ -34,139 +73,237 @@ function getColorIdentity(cardData) {
       card.color_identity.forEach((c) => colors.add(c));
     }
   });
-  return [...colors];
+  return [...colors].sort();
 }
 
 function detectSynergies(cardData) {
-  const textSnippets = cardData.map((card) => card.oracle_text || "").join(" ").toLowerCase();
+  const allText = cardData
+    .map((card) => (card?.oracle_text || "").toLowerCase())
+    .join(" ");
+    
   const synergies = [];
 
-  if (textSnippets.includes("lifelink") || textSnippets.includes("gain life")) synergies.push("Lifegain");
-  if (textSnippets.includes("prowess")) synergies.push("Prowess");
-  if (textSnippets.includes("sacrifice")) synergies.push("Sacrifice");
-  if (textSnippets.includes("graveyard") || textSnippets.includes("return target creature")) synergies.push("Reanimator");
-  if (textSnippets.includes("draw a card")) synergies.push("Card Draw");
-  if (textSnippets.includes("double strike")) synergies.push("Aggro/Combat");
+  // Lifegain synergies
+  if (allText.includes("lifelink") || allText.includes("gain") && allText.includes("life")) {
+    synergies.push("Lifegain");
+  }
+  
+  // Prowess/Spells matter
+  if (allText.includes("prowess") || allText.includes("noncreature spell")) {
+    synergies.push("Prowess/Spells Matter");
+  }
+  
+  // Sacrifice themes
+  if (allText.includes("sacrifice") || allText.includes("dies")) {
+    synergies.push("Sacrifice");
+  }
+  
+  // Graveyard synergies
+  if (allText.includes("graveyard") || allText.includes("return") && allText.includes("battlefield")) {
+    synergies.push("Graveyard");
+  }
+  
+  // Card advantage
+  if (allText.includes("draw") && allText.includes("card")) {
+    synergies.push("Card Draw");
+  }
+  
+  // Aggro themes
+  if (allText.includes("haste") || allText.includes("double strike") || allText.includes("trample")) {
+    synergies.push("Aggro");
+  }
+  
+  // +1/+1 counters
+  if (allText.includes("+1/+1 counter")) {
+    synergies.push("Counters");
+  }
+  
+  // Artifacts matter
+  if (allText.includes("artifact") && cardData.some(c => c?.type_line?.includes("Artifact"))) {
+    synergies.push("Artifacts");
+  }
 
   return synergies;
 }
 
-function tagCardRoles(cardData) {
-  const roleMap = {};
-  cardData.forEach((card) => {
-    if (!card || !card.oracle_text) return;
-    const text = card.oracle_text.toLowerCase();
-    const roles = [];
-    if (text.includes("destroy target creature") || text.includes("deal damage")) roles.push("removal");
-    if (text.includes("counter target spell")) roles.push("counter");
-    if (text.includes("add {") && text.includes("mana")) roles.push("ramp");
-    if (text.includes("draw a card")) roles.push("draw");
-    if (text.includes("lifelink") || text.includes("gain life")) roles.push("lifegain");
-    if (card.type_line && card.type_line.includes("Land")) roles.push("land");
-    roleMap[card.name] = roles;
+function analyzeCardTypes(cardData) {
+  const types = {
+    creatures: 0,
+    instants: 0,
+    sorceries: 0,
+    enchantments: 0,
+    artifacts: 0,
+    planeswalkers: 0,
+    lands: 0
+  };
+
+  cardData.forEach(card => {
+    if (!card?.type_line) return;
+    
+    const typeLine = card.type_line.toLowerCase();
+    if (typeLine.includes("creature")) types.creatures++;
+    if (typeLine.includes("instant")) types.instants++;
+    if (typeLine.includes("sorcery")) types.sorceries++;
+    if (typeLine.includes("enchantment")) types.enchantments++;
+    if (typeLine.includes("artifact")) types.artifacts++;
+    if (typeLine.includes("planeswalker")) types.planeswalkers++;
+    if (typeLine.includes("land")) types.lands++;
   });
-  return roleMap;
+
+  return types;
 }
 
-function enhancedSimilarity(deckProfile, metaProfile) {
-  let score = 0;
-  if (!metaProfile || !metaProfile.profile) return score;
+function determineArchetype(colors, synergies, curve, cardTypes) {
+  const colorCount = colors.length;
+  const avgCMC = Object.entries(curve.curveDist)
+    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / 
+    Object.values(curve.curveDist).reduce((sum, count) => sum + count, 1);
 
-  const matchColors = deckProfile.colors.filter((c) =>
-    metaProfile.profile.colors.includes(c)
-  ).length;
-
-  const matchSynergies = deckProfile.synergies.filter((s) =>
-    metaProfile.profile.synergies.includes(s)
-  ).length;
-
-  const curveOverlap = Object.keys(deckProfile.curve).reduce((acc, cmc) => {
-    return acc + Math.min(deckProfile.curve[cmc] || 0, metaProfile.profile.curve[cmc] || 0);
-  }, 0);
-
-  score += matchColors * 2;
-  score += matchSynergies * 3;
-  score += curveOverlap * 0.5;
-
-  return score;
-}
-
-async function fetchCardData(cardName) {
-  try {
-    let res = await fetch(
-      `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName)}`
-    );
-    if (!res.ok) {
-      res = await fetch(
-        `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cardName)}`
-      );
+  // Aggro decks: low mana curve, lots of creatures
+  if (avgCMC <= 2.5 && cardTypes.creatures >= cardTypes.instants + cardTypes.sorceries) {
+    if (colorCount === 1) {
+      if (colors.includes("R")) return "Mono-Red Aggro";
+      if (colors.includes("W")) return "Mono-White Aggro";
+      if (colors.includes("G")) return "Mono-Green Stompy";
     }
-    const data = await res.json();
-    if (data.object === "error") throw new Error(data.details);
-    return data;
-  } catch (err) {
-    console.warn(`Failed to fetch card: ${cardName}`, err.message);
-    return null;
+    if (colors.includes("R") && colors.includes("W")) return "Boros Aggro";
+    if (colors.includes("R") && colors.includes("G")) return "Gruul Aggro";
+    return "Aggro";
   }
+
+  // Control decks: high instant/sorcery count, card draw
+  if (cardTypes.instants + cardTypes.sorceries > cardTypes.creatures && 
+      synergies.includes("Card Draw")) {
+    if (colors.includes("U") && colors.includes("W") && colors.includes("B")) {
+      return "Esper Control";
+    }
+    if (colors.includes("U") && colors.includes("W")) return "Azorius Control";
+    if (colors.includes("U") && colors.includes("B")) return "Dimir Control";
+    return "Control";
+  }
+
+  // Midrange: balanced creatures and spells
+  if (avgCMC >= 2.5 && avgCMC <= 4 && cardTypes.creatures > 0) {
+    if (colors.includes("B") && colors.includes("G")) return "Golgari Midrange";
+    if (colors.includes("R") && colors.includes("G")) return "Gruul Midrange";
+    return "Midrange";
+  }
+
+  // Combo/synergy based
+  if (synergies.includes("Graveyard")) return "Graveyard Combo";
+  if (synergies.includes("Artifacts")) return "Artifacts";
+  if (synergies.includes("Lifegain")) return "Lifegain";
+
+  // Default classification
+  if (colorCount === 1) return `Mono-${colors[0]} Deck`;
+  if (colorCount >= 3) return "Multicolor Deck";
+  
+  return "Unknown Archetype";
+}
+
+function generateMatchupAnalysis(archetype, colors, synergies) {
+  const favorable = [];
+  const challenging = [];
+
+  // Simple heuristic-based matchup analysis
+  if (archetype.includes("Aggro")) {
+    favorable.push("Control", "Combo", "Slow Midrange");
+    challenging.push("Lifegain", "Fast Aggro", "Removal-Heavy Decks");
+  } else if (archetype.includes("Control")) {
+    favorable.push("Aggro", "Midrange", "Fair Decks");
+    challenging.push("Combo", "Fast Combo", "Counterspell Wars");
+  } else if (archetype.includes("Combo")) {
+    favorable.push("Fair Decks", "Creature-based", "Slow Control");
+    challenging.push("Counterspells", "Hand Disruption", "Fast Aggro");
+  } else if (archetype.includes("Midrange")) {
+    favorable.push("Aggro", "Some Control");
+    challenging.push("Combo", "Faster Midrange", "Card Advantage");
+  }
+
+  return { favorable, challenging };
+}
+
+function generateRecommendations(analysis) {
+  const { archetype, manaCurve, synergies, cardTypes, matchups } = analysis;
+  let recommendations = [];
+
+  recommendations.push(`Your deck appears to be a ${archetype} deck.`);
+  
+  // Mana curve analysis
+  const totalNonlands = Object.values(manaCurve.curveDist).reduce((sum, count) => sum + count, 0) - (manaCurve.curveDist[0] || 0);
+  const avgCMC = Object.entries(manaCurve.curveDist)
+    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / Math.max(totalNonlands, 1);
+
+  recommendations.push(`Your average mana cost is ${avgCMC.toFixed(1)}.`);
+
+  if (avgCMC > 4) {
+    recommendations.push("Consider adding more low-cost cards to improve consistency.");
+  }
+
+  // Card type analysis
+  if (cardTypes.creatures < 8 && archetype.includes("Aggro")) {
+    recommendations.push("Aggro decks typically want 16+ creatures for consistent pressure.");
+  }
+
+  if (cardTypes.lands < 20) {
+    recommendations.push("Consider adding more lands - most decks want 22-26 lands.");
+  } else if (cardTypes.lands > 28) {
+    recommendations.push("You might have too many lands - consider cutting 1-2 for more spells.");
+  }
+
+  // Synergy recommendations
+  if (synergies.length === 0) {
+    recommendations.push("Consider focusing on a specific synergy or theme for better consistency.");
+  }
+
+  if (matchups.challenging.length > 0) {
+    recommendations.push(`Consider sideboard cards for challenging matchups like ${matchups.challenging.join(", ")}.`);
+  }
+
+  return recommendations.join(" ");
 }
 
 async function analyzeMatchups(deckCards) {
-  const [goldfish, scryfall, top8] = await Promise.all([
-    fetchMTGGoldfishMeta(),
-    fetchScryfallArchetypes(),
-    fetchMTGTop8Meta(),
-  ]);
-  const metaDecks = [...goldfish, ...scryfall, ...top8];
+  console.log(`Fetching data for ${deckCards.length} cards...`);
+  
+  // Fetch card data with some delay to respect rate limits
+  const cardData = [];
+  for (let i = 0; i < deckCards.length; i++) {
+    const card = await fetchCardData(deckCards[i]);
+    cardData.push(card);
+    
+    // Small delay every 10 cards to be respectful to Scryfall API
+    if (i % 10 === 9) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
 
-  const cardsData = await Promise.all(deckCards.map(fetchCardData));
-  const filteredCardsData = cardsData.filter(Boolean);
+  const validCards = cardData.filter(Boolean);
+  console.log(`Successfully fetched data for ${validCards.length} cards`);
 
-  const curve = computeCurve(filteredCardsData);
-  const colors = getColorIdentity(filteredCardsData);
-  const synergies = detectSynergies(filteredCardsData);
-  const roles = tagCardRoles(filteredCardsData);
-
-  const deckProfile = {
+  const manaCurve = computeManaCurve(validCards);
+  const colors = getColorIdentity(validCards);
+  const synergies = detectSynergies(validCards);
+  const cardTypes = analyzeCardTypes(validCards);
+  
+  const archetype = determineArchetype(colors, synergies, manaCurve, cardTypes);
+  const matchups = generateMatchupAnalysis(archetype, colors, synergies);
+  
+  const analysis = {
+    archetype,
+    manaCurve: manaCurve.curveDist,
     colors,
     synergies,
-    curve: curve.curveDist,
+    cardTypes,
+    matchups,
+    creatureCount: manaCurve.creatures,
+    spellCount: manaCurve.nonCreatures,
+    landCount: manaCurve.lands
   };
 
-  const matchupScores = metaDecks.map((meta) => {
-    const score = enhancedSimilarity(deckProfile, meta);
-    return { name: meta.name, score };
-  });
+  analysis.recommendations = generateRecommendations(analysis);
 
-  const favorable = matchupScores.filter((m) => m.score > 5).map((m) => m.name);
-  const challenging = matchupScores.filter((m) => m.score < 1).map((m) => m.name);
-
-  let bestArchetype = { name: "Unknown", score: 0 };
-  matchupScores.forEach((m) => {
-    if (m.score > bestArchetype.score) bestArchetype = m;
-  });
-
-  let recommendations = `Your deck is classified as "${bestArchetype.name}" with a mana curve distribution:\n`;
-  for (const [cmc, count] of Object.entries(curve.curveDist)) {
-    recommendations += ` - CMC ${cmc}: ${count} cards\n`;
-  }
-  recommendations += `It has ${curve.creatures} creatures and ${curve.nonCreatures} spells.\n`;
-  if (synergies.length) {
-    recommendations += `Detected synergies: ${synergies.join(", ")}.\n`;
-  }
-  recommendations += `Favorable matchups: ${favorable.length ? favorable.join(", ") : "None detected"}.\n`;
-  recommendations += `Challenging matchups: ${challenging.length ? challenging.join(", ") : "None detected"}.\n`;
-  recommendations += `You may want to improve matchups against ${challenging[0] || "common threats"} by refining your mana curve, reinforcing sideboard options, or integrating more efficient interactive spells.\n`;
-
-  return {
-    favorable,
-    challenging,
-    recommendations,
-    archetype: bestArchetype.name,
-    manaCurve: curve.curveDist,
-    synergies,
-    cardRoles: roles,
-    colors,
-  };
+  return analysis;
 }
 
 export { analyzeMatchups, fetchCardData };
