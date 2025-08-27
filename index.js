@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
-import { analyzeMatchups } from "./analyzeMatchups.js";
+import { analyzeMatchups, analyzeSideboard } from "./analyzeMatchups.js";
 import { enhanceWithScryfall, recommendReplacements } from "./enhancers.js";
 
 const app = express();
@@ -17,36 +17,65 @@ app.post("/api/analyze-deck", async (req, res) => {
   try {
     console.log("Processing decklist...");
     
-    // Parse the decklist to extract card names
-    const deckCards = decklist
-      .split(/\n/)
-      .map((line) => {
-        // Remove quantity numbers and trim whitespace
-        const cleaned = line.replace(/^[0-9xX]+\s*/, "").trim();
-        // Remove sideboard indicators
-        return cleaned.replace(/^(SB:\s*)?/, "").trim();
-      })
-      .filter(Boolean);
+    // Parse the decklist to extract main deck and sideboard
+    const lines = decklist.split(/\n/).map(line => line.trim()).filter(Boolean);
+    const mainDeck = [];
+    const sideboard = [];
+    let inSideboard = false;
 
-    console.log(`Extracted ${deckCards.length} cards from decklist`);
+    for (const line of lines) {
+      // Check if we've hit the sideboard section
+      if (line.toLowerCase().includes('sideboard') || line.toLowerCase().startsWith('sb:')) {
+        inSideboard = true;
+        // Skip the "Sideboard" header line
+        if (line.toLowerCase() === 'sideboard') continue;
+      }
 
-    if (deckCards.length === 0) {
-      return res.status(400).json({ error: "No valid cards found in decklist" });
+      // Extract card name by removing quantity numbers and SB: prefix
+      let cardName = line.replace(/^[0-9xX]+\s*/, "").trim();
+      cardName = cardName.replace(/^SB:\s*/i, "").trim();
+      
+      if (cardName) {
+        if (inSideboard) {
+          sideboard.push(cardName);
+        } else {
+          mainDeck.push(cardName);
+        }
+      }
     }
 
-    // Analyze the deck
-    const analysis = await analyzeMatchups(deckCards);
+    console.log(`Extracted ${mainDeck.length} main deck cards and ${sideboard.length} sideboard cards`);
+
+    if (mainDeck.length === 0) {
+      return res.status(400).json({ error: "No valid cards found in main deck" });
+    }
+
+    // Analyze the main deck
+    const mainDeckAnalysis = await analyzeMatchups(mainDeck);
     
-    // Get enhanced card data for recommendations
-    const enhancedCards = await enhanceWithScryfall(deckCards);
-    const replacements = await recommendReplacements(deckCards, enhancedCards);
+    // Analyze sideboard if it exists
+    let sideboardAnalysis = null;
+    if (sideboard.length > 0) {
+      sideboardAnalysis = await analyzeSideboard(sideboard, mainDeckAnalysis);
+    }
+    
+    // Get enhanced card data for recommendations (main deck only)
+    const enhancedCards = await enhanceWithScryfall(mainDeck);
+    const replacements = await recommendReplacements(mainDeck, enhancedCards);
 
     console.log("Analysis complete");
 
     res.json({ 
-      ...analysis, 
+      mainDeck: {
+        ...mainDeckAnalysis,
+        cardCount: mainDeck.length
+      },
+      sideboard: sideboardAnalysis,
       replacementSuggestions: replacements,
-      totalCards: deckCards.length
+      totalCards: mainDeck.length + sideboard.length,
+      // Legacy fields for backward compatibility
+      ...mainDeckAnalysis,
+      totalCards: mainDeck.length
     });
   } catch (err) {
     console.error("Error analyzing deck:", err);
