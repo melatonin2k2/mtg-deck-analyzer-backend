@@ -318,4 +318,206 @@ async function analyzeMatchups(deckCards) {
   return analysis;
 }
 
-export { analyzeMatchups, fetchCardData };
+async function analyzeSideboard(sideboardCards, mainDeckAnalysis) {
+  console.log(`Analyzing sideboard with ${sideboardCards.length} cards...`);
+  
+  if (sideboardCards.length === 0) {
+    return null;
+  }
+
+  // Fetch sideboard card data
+  const cardData = [];
+  for (let i = 0; i < sideboardCards.length; i++) {
+    const card = await fetchCardData(sideboardCards[i]);
+    cardData.push(card);
+    
+    // Small delay for API respect
+    if (i % 5 === 4) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+
+  const validCards = cardData.filter(Boolean);
+  console.log(`Successfully analyzed ${validCards.length} sideboard cards`);
+
+  // Analyze sideboard composition
+  const sideboardTypes = analyzeCardTypes(validCards);
+  const sideboardSynergies = detectSynergies(validCards);
+  const sideboardColors = getColorIdentity(validCards);
+  
+  // Categorize sideboard cards by purpose
+  const sideboardPurposes = categorizeSideboardCards(validCards);
+  
+  // Analyze sideboard strategy
+  const sideboardStrategy = analyzeSideboardStrategy(sideboardPurposes, mainDeckAnalysis);
+
+  return {
+    cardCount: sideboardCards.length,
+    validCardCount: validCards.length,
+    types: sideboardTypes,
+    synergies: sideboardSynergies,
+    colors: sideboardColors,
+    purposes: sideboardPurposes,
+    strategy: sideboardStrategy,
+    recommendations: generateSideboardRecommendations(sideboardPurposes, mainDeckAnalysis)
+  };
+}
+
+function categorizeSideboardCards(cardData) {
+  const purposes = {
+    removal: [],
+    counterspells: [],
+    graveyard_hate: [],
+    artifact_enchantment_hate: [],
+    hand_disruption: [],
+    card_draw: [],
+    threats: [],
+    protection: [],
+    combo_hate: [],
+    other: []
+  };
+
+  cardData.forEach(card => {
+    if (!card || !card.oracle_text) {
+      purposes.other.push(card?.name || 'Unknown');
+      return;
+    }
+
+    const text = card.oracle_text.toLowerCase();
+    const types = card.type_line?.toLowerCase() || '';
+    
+    // Removal
+    if (text.includes('destroy target creature') || 
+        text.includes('exile target creature') ||
+        text.includes('deal') && text.includes('damage')) {
+      purposes.removal.push(card.name);
+    }
+    // Counterspells
+    else if (text.includes('counter target spell')) {
+      purposes.counterspells.push(card.name);
+    }
+    // Graveyard hate
+    else if (text.includes('exile target card from a graveyard') ||
+             text.includes('graveyard') && text.includes('exile')) {
+      purposes.graveyard_hate.push(card.name);
+    }
+    // Artifact/Enchantment hate
+    else if (text.includes('destroy target artifact') ||
+             text.includes('destroy target enchantment')) {
+      purposes.artifact_enchantment_hate.push(card.name);
+    }
+    // Hand disruption
+    else if (text.includes('target opponent discards') ||
+             text.includes('look at target opponent\'s hand')) {
+      purposes.hand_disruption.push(card.name);
+    }
+    // Card draw
+    else if (text.includes('draw') && text.includes('card')) {
+      purposes.card_draw.push(card.name);
+    }
+    // Threats (creatures and planeswalkers)
+    else if (types.includes('creature') || types.includes('planeswalker')) {
+      purposes.threats.push(card.name);
+    }
+    // Protection
+    else if (text.includes('protection') || 
+             text.includes('hexproof') ||
+             text.includes('prevent')) {
+      purposes.protection.push(card.name);
+    }
+    // Combo hate
+    else if (text.includes('can\'t be cast') ||
+             text.includes('players can\'t') ||
+             text.includes('opponents can\'t')) {
+      purposes.combo_hate.push(card.name);
+    }
+    else {
+      purposes.other.push(card.name);
+    }
+  });
+
+  return purposes;
+}
+
+function analyzeSideboardStrategy(purposes, mainDeckAnalysis) {
+  const strategy = [];
+  
+  // Analyze what the sideboard is designed to handle
+  if (purposes.removal.length > 0) {
+    strategy.push(`Anti-creature strategy with ${purposes.removal.length} removal spells`);
+  }
+  
+  if (purposes.counterspells.length > 0) {
+    strategy.push(`Control elements with ${purposes.counterspells.length} counterspells`);
+  }
+  
+  if (purposes.hand_disruption.length > 0) {
+    strategy.push(`Hand disruption package with ${purposes.hand_disruption.length} discard effects`);
+  }
+  
+  if (purposes.graveyard_hate.length > 0) {
+    strategy.push(`Graveyard interaction with ${purposes.graveyard_hate.length} hate cards`);
+  }
+  
+  if (purposes.threats.length > 0) {
+    strategy.push(`Additional threats with ${purposes.threats.length} creatures/planeswalkers`);
+  }
+
+  // Analyze sideboard balance
+  const totalPurposefulCards = Object.values(purposes).flat().length - purposes.other.length;
+  const coverage = (totalPurposefulCards / Object.values(purposes).flat().length) * 100;
+  
+  if (coverage > 80) {
+    strategy.push("Well-focused sideboard with clear purposes for most cards");
+  } else if (coverage > 60) {
+    strategy.push("Moderately focused sideboard with some unclear inclusions");
+  } else {
+    strategy.push("Unfocused sideboard with many unclear card choices");
+  }
+
+  return strategy;
+}
+
+function generateSideboardRecommendations(purposes, mainDeckAnalysis) {
+  const recommendations = [];
+  const archetype = mainDeckAnalysis.archetype || '';
+  
+  // Archetype-specific recommendations
+  if (archetype.includes('Aggro')) {
+    if (purposes.removal.length < 2) {
+      recommendations.push("Aggro decks often benefit from 2-3 removal spells to deal with blockers");
+    }
+    if (purposes.hand_disruption.length < 2) {
+      recommendations.push("Consider hand disruption to fight combo and control decks");
+    }
+  } else if (archetype.includes('Control')) {
+    if (purposes.counterspells.length < 2) {
+      recommendations.push("Control decks typically want additional counterspells in the sideboard");
+    }
+    if (purposes.removal.length < 3) {
+      recommendations.push("More removal options can help against aggressive strategies");
+    }
+  } else if (archetype.includes('Midrange')) {
+    if (purposes.removal.length + purposes.counterspells.length < 4) {
+      recommendations.push("Midrange decks need flexible answers - consider more removal or counterspells");
+    }
+  }
+
+  // General sideboard health checks
+  const totalCards = Object.values(purposes).flat().length;
+  if (totalCards < 12) {
+    recommendations.push("Consider filling out your 15-card sideboard for more options");
+  }
+  
+  if (purposes.other.length > 3) {
+    recommendations.push("Some sideboard cards have unclear purposes - consider more focused choices");
+  }
+  
+  if (purposes.graveyard_hate.length === 0) {
+    recommendations.push("Consider adding graveyard hate for the current meta");
+  }
+
+  return recommendations;
+}
+
+export { analyzeMatchups, fetchCardData, analyzeSideboard };
