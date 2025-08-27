@@ -21,11 +21,27 @@ const fetchCardData = async (cardName) => {
         throw new Error(`Card not found: ${cardName}`);
       }
       const data = await fuzzyRes.json();
+      console.log(`Fetched card data for ${cardName}:`, {
+        name: data.name,
+        type_line: data.type_line,
+        oracle_text: data.oracle_text,
+        keywords: data.keywords,
+        cmc: data.cmc,
+        legalities: data.legalities
+      });
       cardCache.set(cardName, data);
       return data;
     }
     
     const data = await res.json();
+    console.log(`Fetched card data for ${cardName}:`, {
+      name: data.name,
+      type_line: data.type_line,
+      oracle_text: data.oracle_text,
+      keywords: data.keywords,
+      cmc: data.cmc,
+      legalities: data.legalities
+    });
     cardCache.set(cardName, data);
     return data;
   } catch (err) {
@@ -135,7 +151,10 @@ export async function recommendReplacements(deckCards, fetchedCards) {
       colors = [], 
       cmc = 0, 
       set_type = "",
-      legalities = {}
+      legalities = {},
+      keywords = [],
+      power,
+      toughness
     } = cardData;
 
     let shouldReplace = false;
@@ -146,22 +165,43 @@ export async function recommendReplacements(deckCards, fetchedCards) {
       shouldReplace = true;
       reason = "Not legal in Standard format";
     }
-    // Check for vanilla creatures (creatures with no abilities)
-    else if (type_line.includes("Creature") && oracle_text.trim() === "") {
+    // Check for truly vanilla creatures (creatures with no oracle text AND no keywords AND basic P/T)
+    else if (type_line.includes("Creature") && 
+             oracle_text.trim() === "" && 
+             (!keywords || keywords.length === 0) &&
+             power && toughness &&
+             !type_line.includes("Legendary") &&
+             cmc <= 3) {
       shouldReplace = true;
-      reason = "Vanilla creature - consider creatures with abilities";
+      reason = "Basic vanilla creature - consider creatures with abilities";
     }
-    // Check for high CMC cards without immediate impact
-    else if (cmc >= 6 && !oracle_text.toLowerCase().includes("when") && 
+    // Check for very high CMC cards without immediate impact or protection
+    else if (cmc >= 7 && 
+             !oracle_text.toLowerCase().includes("when") && 
+             !oracle_text.toLowerCase().includes("enters") &&
              !oracle_text.toLowerCase().includes("etb") &&
-             !oracle_text.toLowerCase().includes("enters")) {
+             !oracle_text.toLowerCase().includes("flash") &&
+             !oracle_text.toLowerCase().includes("haste") &&
+             !oracle_text.toLowerCase().includes("protection") &&
+             !oracle_text.toLowerCase().includes("hexproof") &&
+             !oracle_text.toLowerCase().includes("win the game")) {
       shouldReplace = true;
-      reason = "High mana cost without immediate impact";
+      reason = "Very high mana cost without immediate impact or protection";
     }
     // Check for draft-specific or weak sets
-    else if (set_type === "draft_innovation" || set_type === "funny") {
+    else if (set_type === "draft_innovation" || set_type === "funny" || set_type === "memorabilia") {
       shouldReplace = true;
-      reason = "From a draft or novelty set";
+      reason = "From a draft, novelty, or memorabilia set";
+    }
+    // Check for cards that are generally considered weak in competitive play
+    else if (cmc >= 5 && 
+             type_line.includes("Creature") &&
+             (!oracle_text.includes("when") && !oracle_text.includes("enters")) &&
+             (!keywords || keywords.length === 0) &&
+             power && toughness &&
+             parseInt(power) + parseInt(toughness) <= cmc * 2) {
+      shouldReplace = true;
+      reason = "High cost creature with poor stats and no immediate value";
     }
     
     if (shouldReplace) {
