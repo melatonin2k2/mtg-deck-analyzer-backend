@@ -45,12 +45,17 @@ function computeManaCurve(cardData) {
   let creatures = 0;
   let nonCreatures = 0;
   let lands = 0;
+  const cmcBreakdown = {
+    '0': 0, '1': 0, '2': 0, '3': 0, '4': 0, '5': 0, '6': 0, '7+': 0
+  };
 
   cardData.forEach((card) => {
     if (!card) return;
     
-    const cmc = Math.min(card.cmc || 0, 7); // bucket 7+ mana costs
+    const cmc = card.cmc || 0;
+    const cmcKey = cmc >= 7 ? '7+' : cmc.toString();
     curveDist[cmc] = (curveDist[cmc] || 0) + 1;
+    cmcBreakdown[cmcKey]++;
     
     if (card.type_line) {
       if (card.type_line.includes("Land")) {
@@ -63,67 +68,157 @@ function computeManaCurve(cardData) {
     }
   });
 
-  return { creatures, nonCreatures, lands, curveDist };
+  const totalNonLands = creatures + nonCreatures;
+  const avgCMC = totalNonLands > 0 ? 
+    Object.entries(curveDist)
+      .filter(([cmc]) => parseInt(cmc) > 0)
+      .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / totalNonLands : 0;
+
+  return { 
+    creatures, 
+    nonCreatures, 
+    lands, 
+    curveDist,
+    cmcBreakdown,
+    avgCMC: Math.round(avgCMC * 100) / 100
+  };
 }
 
 function getColorIdentity(cardData) {
   const colors = new Set();
+  const colorCounts = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+  
   cardData.forEach((card) => {
     if (card && Array.isArray(card.color_identity)) {
-      card.color_identity.forEach((c) => colors.add(c));
+      card.color_identity.forEach((c) => {
+        colors.add(c);
+        colorCounts[c] = (colorCounts[c] || 0) + 1;
+      });
     }
   });
-  return [...colors].sort();
+  
+  return { 
+    colors: [...colors].sort(),
+    colorCounts,
+    dominantColor: Object.entries(colorCounts).reduce((a, b) => colorCounts[a[0]] > colorCounts[b[0]] ? a : b)[0]
+  };
 }
 
 function detectSynergies(cardData) {
   const allText = cardData
     .map((card) => (card?.oracle_text || "").toLowerCase())
     .join(" ");
+  const allTypes = cardData
+    .map((card) => (card?.type_line || "").toLowerCase())
+    .join(" ");
     
   const synergies = [];
+  const synergyDetails = {};
 
   // Lifegain synergies
-  if (allText.includes("lifelink") || allText.includes("gain") && allText.includes("life")) {
+  const lifegainCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("lifelink") || 
+    card?.oracle_text?.toLowerCase().includes("gain") && card?.oracle_text?.toLowerCase().includes("life")
+  );
+  if (lifegainCards.length >= 2) {
     synergies.push("Lifegain");
+    synergyDetails.Lifegain = {
+      cardCount: lifegainCards.length,
+      keyCards: lifegainCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // Prowess/Spells matter
-  if (allText.includes("prowess") || allText.includes("noncreature spell")) {
+  const prowessCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("prowess") || 
+    card?.oracle_text?.toLowerCase().includes("noncreature spell")
+  );
+  if (prowessCards.length >= 2) {
     synergies.push("Prowess/Spells Matter");
+    synergyDetails["Prowess/Spells Matter"] = {
+      cardCount: prowessCards.length,
+      keyCards: prowessCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // Sacrifice themes
-  if (allText.includes("sacrifice") || allText.includes("dies")) {
+  const sacrificeCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("sacrifice") || 
+    card?.oracle_text?.toLowerCase().includes("dies")
+  );
+  if (sacrificeCards.length >= 3) {
     synergies.push("Sacrifice");
+    synergyDetails.Sacrifice = {
+      cardCount: sacrificeCards.length,
+      keyCards: sacrificeCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // Graveyard synergies
-  if (allText.includes("graveyard") || allText.includes("return") && allText.includes("battlefield")) {
+  const graveyardCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("graveyard") || 
+    (card?.oracle_text?.toLowerCase().includes("return") && card?.oracle_text?.toLowerCase().includes("battlefield"))
+  );
+  if (graveyardCards.length >= 2) {
     synergies.push("Graveyard");
+    synergyDetails.Graveyard = {
+      cardCount: graveyardCards.length,
+      keyCards: graveyardCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // Card advantage
-  if (allText.includes("draw") && allText.includes("card")) {
+  const cardDrawCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("draw") && card?.oracle_text?.toLowerCase().includes("card")
+  );
+  if (cardDrawCards.length >= 3) {
     synergies.push("Card Draw");
+    synergyDetails["Card Draw"] = {
+      cardCount: cardDrawCards.length,
+      keyCards: cardDrawCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // Aggro themes
-  if (allText.includes("haste") || allText.includes("double strike") || allText.includes("trample")) {
+  const aggroCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("haste") || 
+    card?.oracle_text?.toLowerCase().includes("double strike") || 
+    card?.oracle_text?.toLowerCase().includes("trample")
+  );
+  if (aggroCards.length >= 2) {
     synergies.push("Aggro");
+    synergyDetails.Aggro = {
+      cardCount: aggroCards.length,
+      keyCards: aggroCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // +1/+1 counters
-  if (allText.includes("+1/+1 counter")) {
+  const counterCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("+1/+1 counter")
+  );
+  if (counterCards.length >= 3) {
     synergies.push("Counters");
+    synergyDetails.Counters = {
+      cardCount: counterCards.length,
+      keyCards: counterCards.slice(0, 3).map(c => c.name)
+    };
   }
   
   // Artifacts matter
-  if (allText.includes("artifact") && cardData.some(c => c?.type_line?.includes("Artifact"))) {
+  const artifactCards = cardData.filter(card => card?.type_line?.includes("Artifact"));
+  const artifactSynergyCards = cardData.filter(card => 
+    card?.oracle_text?.toLowerCase().includes("artifact") && !card?.type_line?.includes("Artifact")
+  );
+  if (artifactCards.length >= 4 || artifactSynergyCards.length >= 2) {
     synergies.push("Artifacts");
+    synergyDetails.Artifacts = {
+      cardCount: artifactCards.length + artifactSynergyCards.length,
+      keyCards: [...artifactCards, ...artifactSynergyCards].slice(0, 3).map(c => c.name)
+    };
   }
 
-  return synergies;
+  return { synergies, synergyDetails };
 }
 
 function analyzeCardTypes(cardData) {
@@ -137,59 +232,242 @@ function analyzeCardTypes(cardData) {
     lands: 0
   };
 
+  const typeBreakdown = {
+    creatures: [],
+    instants: [],
+    sorceries: [],
+    enchantments: [],
+    artifacts: [],
+    planeswalkers: [],
+    lands: []
+  };
+
   cardData.forEach(card => {
     if (!card?.type_line) return;
     
     const typeLine = card.type_line.toLowerCase();
-    if (typeLine.includes("creature")) types.creatures++;
-    if (typeLine.includes("instant")) types.instants++;
-    if (typeLine.includes("sorcery")) types.sorceries++;
-    if (typeLine.includes("enchantment")) types.enchantments++;
-    if (typeLine.includes("artifact")) types.artifacts++;
-    if (typeLine.includes("planeswalker")) types.planeswalkers++;
-    if (typeLine.includes("land")) types.lands++;
+    const cardInfo = { name: card.name, cmc: card.cmc };
+    
+    if (typeLine.includes("creature")) {
+      types.creatures++;
+      typeBreakdown.creatures.push(cardInfo);
+    }
+    if (typeLine.includes("instant")) {
+      types.instants++;
+      typeBreakdown.instants.push(cardInfo);
+    }
+    if (typeLine.includes("sorcery")) {
+      types.sorceries++;
+      typeBreakdown.sorceries.push(cardInfo);
+    }
+    if (typeLine.includes("enchantment")) {
+      types.enchantments++;
+      typeBreakdown.enchantments.push(cardInfo);
+    }
+    if (typeLine.includes("artifact")) {
+      types.artifacts++;
+      typeBreakdown.artifacts.push(cardInfo);
+    }
+    if (typeLine.includes("planeswalker")) {
+      types.planeswalkers++;
+      typeBreakdown.planeswalkers.push(cardInfo);
+    }
+    if (typeLine.includes("land")) {
+      types.lands++;
+      typeBreakdown.lands.push(cardInfo);
+    }
   });
 
-  return types;
+  return { types, typeBreakdown };
+}
+
+function analyzeDeckConsistency(cardData) {
+  const cardCounts = {};
+  const multiplesCounts = { 4: 0, 3: 0, 2: 0, 1: 0 };
+  
+  cardData.forEach(card => {
+    if (!card?.name) return;
+    cardCounts[card.name] = (cardCounts[card.name] || 0) + 1;
+  });
+
+  Object.values(cardCounts).forEach(count => {
+    if (count >= 4) multiplesCounts[4]++;
+    else if (count === 3) multiplesCounts[3]++;
+    else if (count === 2) multiplesCounts[2]++;
+    else multiplesCounts[1]++;
+  });
+
+  const uniqueCards = Object.keys(cardCounts).length;
+  const totalCards = cardData.filter(Boolean).length;
+  const consistencyScore = Math.round(
+    ((multiplesCounts[4] * 4 + multiplesCounts[3] * 3 + multiplesCounts[2] * 2) / totalCards) * 100
+  );
+
+  return {
+    uniqueCards,
+    totalCards,
+    multiplesCounts,
+    consistencyScore,
+    mostPlayedCards: Object.entries(cardCounts)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }))
+  };
+}
+
+function analyzeManaBase(cardData) {
+  const lands = cardData.filter(card => card?.type_line?.includes("Land"));
+  const nonLands = cardData.filter(card => card && !card?.type_line?.includes("Land"));
+  
+  const landTypes = {
+    basic: 0,
+    dual: 0,
+    utility: 0,
+    fastlands: 0,
+    shocklands: 0,
+    checklands: 0
+  };
+
+  const colorRequirements = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+  
+  lands.forEach(land => {
+    const name = land.name.toLowerCase();
+    const text = land.oracle_text?.toLowerCase() || "";
+    
+    // Count basic lands
+    if (name.includes("plains") || name.includes("island") || name.includes("swamp") || 
+        name.includes("mountain") || name.includes("forest")) {
+      landTypes.basic++;
+    }
+    // Count dual lands (rough heuristic)
+    else if (text.includes("add") && (text.match(/\{[wubrg]\}/g) || []).length >= 2) {
+      landTypes.dual++;
+      
+      // Specific dual land types
+      if (name.includes("spirebluff") || name.includes("botanical") || name.includes("concealed")) {
+        landTypes.fastlands++;
+      }
+      if (text.includes("pay 2 life") || name.includes("shock")) {
+        landTypes.shocklands++;
+      }
+      if (text.includes("enters tapped unless you control")) {
+        landTypes.checklands++;
+      }
+    }
+    // Utility lands
+    else {
+      landTypes.utility++;
+    }
+  });
+
+  // Analyze color requirements from non-land cards
+  nonLands.forEach(card => {
+    if (card?.mana_cost) {
+      const manaCost = card.mana_cost.toLowerCase();
+      colorRequirements.W += (manaCost.match(/\{w\}/g) || []).length;
+      colorRequirements.U += (manaCost.match(/\{u\}/g) || []).length;
+      colorRequirements.B += (manaCost.match(/\{b\}/g) || []).length;
+      colorRequirements.R += (manaCost.match(/\{r\}/g) || []).length;
+      colorRequirements.G += (manaCost.match(/\{g\}/g) || []).length;
+    }
+  });
+
+  const totalColorSymbols = Object.values(colorRequirements).reduce((sum, count) => sum + count, 0);
+  const landRatio = lands.length / (lands.length + nonLands.length);
+  const recommendedLands = Math.round(24 + (totalColorSymbols / nonLands.length - 1.5) * 2);
+
+  return {
+    totalLands: lands.length,
+    landTypes,
+    colorRequirements,
+    totalColorSymbols,
+    landRatio: Math.round(landRatio * 100),
+    recommendedLands,
+    manabaseQuality: analyzeManabaseQuality(landTypes, colorRequirements, lands.length)
+  };
+}
+
+function analyzeManabaseQuality(landTypes, colorRequirements, totalLands) {
+  let score = 50; // Base score
+  const feedback = [];
+  
+  const activeColors = Object.values(colorRequirements).filter(count => count > 0).length;
+  
+  // Penalize for too few lands
+  if (totalLands < 22) {
+    score -= 15;
+    feedback.push("Consider adding more lands for consistency");
+  } else if (totalLands > 26) {
+    score -= 10;
+    feedback.push("Might have too many lands - consider more spells");
+  } else {
+    score += 10;
+  }
+  
+  // Reward good dual land count for multicolor decks
+  if (activeColors > 1) {
+    if (landTypes.dual >= Math.min(activeColors * 2, 8)) {
+      score += 15;
+      feedback.push("Good dual land count for multicolor deck");
+    } else {
+      score -= 10;
+      feedback.push("Could use more dual lands for color fixing");
+    }
+  }
+  
+  // Penalize for too many utility lands
+  if (landTypes.utility > 3) {
+    score -= 5;
+    feedback.push("Many utility lands might hurt color consistency");
+  }
+  
+  // Reward good basic land ratio
+  const basicRatio = landTypes.basic / totalLands;
+  if (basicRatio >= 0.4 && basicRatio <= 0.7) {
+    score += 10;
+  }
+
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    grade: score >= 80 ? "A" : score >= 65 ? "B" : score >= 50 ? "C" : "D",
+    feedback
+  };
 }
 
 function determineArchetype(colors, synergies, curve, cardTypes) {
-  const colorCount = colors ? colors.length : 0;
-  const curveDist = curve ? curve.curveDist : {};
-  const safeCardTypes = cardTypes || {};
-  const safeSynergies = synergies || [];
+  const colorCount = colors?.colors?.length || 0;
+  const curveDist = curve?.curveDist || {};
+  const safeCardTypes = cardTypes?.types || {};
+  const safeSynergies = synergies?.synergies || [];
+  const avgCMC = curve?.avgCMC || 0;
   
-  const totalCards = Object.values(curveDist).reduce((sum, count) => sum + count, 0);
-  const avgCMC = totalCards > 0 ? Object.entries(curveDist)
-    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / totalCards : 0;
-
   // Aggro decks: low mana curve, lots of creatures
   if (avgCMC <= 2.5 && safeCardTypes.creatures >= (safeCardTypes.instants + safeCardTypes.sorceries)) {
     if (colorCount === 1) {
-      if (colors && colors.includes("R")) return "Mono-Red Aggro";
-      if (colors && colors.includes("W")) return "Mono-White Aggro";
-      if (colors && colors.includes("G")) return "Mono-Green Stompy";
+      if (colors.colors.includes("R")) return "Mono-Red Aggro";
+      if (colors.colors.includes("W")) return "Mono-White Aggro";
+      if (colors.colors.includes("G")) return "Mono-Green Stompy";
     }
-    if (colors && colors.includes("R") && colors.includes("W")) return "Boros Aggro";
-    if (colors && colors.includes("R") && colors.includes("G")) return "Gruul Aggro";
+    if (colors.colors.includes("R") && colors.colors.includes("W")) return "Boros Aggro";
+    if (colors.colors.includes("R") && colors.colors.includes("G")) return "Gruul Aggro";
     return "Aggro";
   }
 
   // Control decks: high instant/sorcery count, card draw
   if ((safeCardTypes.instants + safeCardTypes.sorceries) > safeCardTypes.creatures && 
       safeSynergies.includes("Card Draw")) {
-    if (colors && colors.includes("U") && colors.includes("W") && colors.includes("B")) {
+    if (colors.colors.includes("U") && colors.colors.includes("W") && colors.colors.includes("B")) {
       return "Esper Control";
     }
-    if (colors && colors.includes("U") && colors.includes("W")) return "Azorius Control";
-    if (colors && colors.includes("U") && colors.includes("B")) return "Dimir Control";
+    if (colors.colors.includes("U") && colors.colors.includes("W")) return "Azorius Control";
+    if (colors.colors.includes("U") && colors.colors.includes("B")) return "Dimir Control";
     return "Control";
   }
 
   // Midrange: balanced creatures and spells
   if (avgCMC >= 2.5 && avgCMC <= 4 && safeCardTypes.creatures > 0) {
-    if (colors && colors.includes("B") && colors.includes("G")) return "Golgari Midrange";
-    if (colors && colors.includes("R") && colors.includes("G")) return "Gruul Midrange";
+    if (colors.colors.includes("B") && colors.colors.includes("G")) return "Golgari Midrange";
+    if (colors.colors.includes("R") && colors.colors.includes("G")) return "Gruul Midrange";
     return "Midrange";
   }
 
@@ -199,7 +477,7 @@ function determineArchetype(colors, synergies, curve, cardTypes) {
   if (safeSynergies.includes("Lifegain")) return "Lifegain";
 
   // Default classification
-  if (colorCount === 1 && colors) return `Mono-${colors[0]} Deck`;
+  if (colorCount === 1 && colors.colors) return `Mono-${colors.colors[0]} Deck`;
   if (colorCount >= 3) return "Multicolor Deck";
   
   return "Unknown Archetype";
@@ -208,8 +486,8 @@ function determineArchetype(colors, synergies, curve, cardTypes) {
 function generateMatchupAnalysis(archetype, colors, synergies) {
   const favorable = [];
   const challenging = [];
-  const safeColors = colors || [];
-  const safeSynergies = synergies || [];
+  const safeColors = colors?.colors || [];
+  const safeSynergies = synergies?.synergies || [];
   const safeArchetype = archetype || "Unknown";
 
   // Simple heuristic-based matchup analysis
@@ -231,25 +509,46 @@ function generateMatchupAnalysis(archetype, colors, synergies) {
 }
 
 function generateRecommendations(analysis) {
-  const { archetype, manaCurve, synergies, cardTypes, matchups } = analysis;
+  const { 
+    archetype, 
+    manaCurve, 
+    synergies, 
+    cardTypes, 
+    matchups, 
+    consistency,
+    manabase 
+  } = analysis;
+  
   let recommendations = [];
 
   recommendations.push(`Your deck appears to be a ${archetype} deck.`);
   
   // Mana curve analysis
-  const curveDist = manaCurve || {};
-  const totalNonlands = Object.values(curveDist).reduce((sum, count) => sum + count, 0) - (curveDist[0] || 0);
-  const avgCMC = Object.entries(curveDist)
-    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / Math.max(totalNonlands, 1);
-
-  recommendations.push(`Your average mana cost is ${avgCMC.toFixed(1)}.`);
+  const avgCMC = manaCurve?.avgCMC || 0;
+  recommendations.push(`Your average mana cost is ${avgCMC}.`);
 
   if (avgCMC > 4) {
     recommendations.push("Consider adding more low-cost cards to improve consistency.");
+  } else if (avgCMC < 1.5) {
+    recommendations.push("Very low curve - ensure you have enough impactful threats.");
+  }
+
+  // Consistency recommendations
+  if (consistency?.consistencyScore < 60) {
+    recommendations.push("Consider running more 4-ofs of your best cards for better consistency.");
+  } else if (consistency?.consistencyScore > 80) {
+    recommendations.push("Good consistency with multiple copies of key cards.");
+  }
+
+  // Manabase recommendations
+  if (manabase?.manabaseQuality?.grade === "D") {
+    recommendations.push("Your manabase needs significant improvement for reliable color access.");
+  } else if (manabase?.manabaseQuality?.grade === "A") {
+    recommendations.push("Excellent manabase construction.");
   }
 
   // Card type analysis
-  const safeCardTypes = cardTypes || {};
+  const safeCardTypes = cardTypes?.types || {};
   if (safeCardTypes.creatures < 8 && archetype.includes("Aggro")) {
     recommendations.push("Aggro decks typically want 16+ creatures for consistent pressure.");
   }
@@ -261,9 +560,11 @@ function generateRecommendations(analysis) {
   }
 
   // Synergy recommendations
-  const safeSynergies = synergies || [];
+  const safeSynergies = synergies?.synergies || [];
   if (safeSynergies.length === 0) {
     recommendations.push("Consider focusing on a specific synergy or theme for better consistency.");
+  } else if (safeSynergies.length >= 3) {
+    recommendations.push("Good synergy focus - ensure all cards support your main themes.");
   }
 
   const safeMatchups = matchups || {};
@@ -292,30 +593,84 @@ async function analyzeMatchups(deckCards) {
   const validCards = cardData.filter(Boolean);
   console.log(`Successfully fetched data for ${validCards.length} cards`);
 
-  // Safely compute analysis components
+  // Perform comprehensive analysis
   const manaCurve = computeManaCurve(validCards);
   const colors = getColorIdentity(validCards);
-  const synergies = detectSynergies(validCards);
-  const cardTypes = analyzeCardTypes(validCards);
+  const synergyAnalysis = detectSynergies(validCards);
+  const cardTypeAnalysis = analyzeCardTypes(validCards);
+  const consistency = analyzeDeckConsistency(validCards);
+  const manabase = analyzeManaBase(validCards);
   
-  const archetype = determineArchetype(colors, synergies, manaCurve, cardTypes);
-  const matchups = generateMatchupAnalysis(archetype, colors, synergies);
+  const archetype = determineArchetype(colors, synergyAnalysis, manaCurve, cardTypeAnalysis);
+  const matchups = generateMatchupAnalysis(archetype, colors, synergyAnalysis);
   
   const analysis = {
     archetype,
-    manaCurve: manaCurve ? manaCurve.curveDist : {},
-    colors: colors || [],
-    synergies: synergies || [],
-    cardTypes: cardTypes || {},
-    matchups: matchups || { favorable: [], challenging: [] },
-    creatureCount: manaCurve ? manaCurve.creatures : 0,
-    spellCount: manaCurve ? manaCurve.nonCreatures : 0,
-    landCount: manaCurve ? manaCurve.lands : 0
+    manaCurve: {
+      curveDist: manaCurve.curveDist,
+      avgCMC: manaCurve.avgCMC,
+      breakdown: manaCurve.cmcBreakdown
+    },
+    colors: colors.colors,
+    colorAnalysis: colors,
+    synergies: synergyAnalysis.synergies,
+    synergyDetails: synergyAnalysis.synergyDetails,
+    cardTypes: cardTypeAnalysis.types,
+    cardTypeBreakdown: cardTypeAnalysis.typeBreakdown,
+    consistency,
+    manabase,
+    matchups,
+    creatureCount: manaCurve.creatures,
+    spellCount: manaCurve.nonCreatures,
+    landCount: manaCurve.lands,
+    deckHealth: calculateDeckHealth(manaCurve, synergyAnalysis, consistency, manabase)
   };
 
   analysis.recommendations = generateRecommendations(analysis);
 
   return analysis;
+}
+
+function calculateDeckHealth(manaCurve, synergies, consistency, manabase) {
+  let score = 50; // Base score
+  const feedback = [];
+
+  // Mana curve health
+  const avgCMC = manaCurve.avgCMC;
+  if (avgCMC >= 1.8 && avgCMC <= 3.2) {
+    score += 15;
+    feedback.push("Good mana curve");
+  } else if (avgCMC > 4) {
+    score -= 10;
+    feedback.push("High mana curve may cause consistency issues");
+  }
+
+  // Synergy health
+  if (synergies.synergies.length >= 2) {
+    score += 15;
+    feedback.push("Strong synergy focus");
+  } else if (synergies.synergies.length === 0) {
+    score -= 5;
+    feedback.push("Lacks clear synergy direction");
+  }
+
+  // Consistency health
+  if (consistency.consistencyScore >= 70) {
+    score += 10;
+    feedback.push("Good card consistency");
+  } else if (consistency.consistencyScore < 50) {
+    score -= 10;
+    feedback.push("Poor consistency - too many one-ofs");
+  }
+
+  // Manabase health
+  score += Math.round(manabase.manabaseQuality.score * 0.2);
+
+  return {
+    score: Math.max(0, Math.min(100, score)),
+    grade: score >= 80 ? "A" : score >= 65 ? "B" : score >= 50 ? "C" : "D",
+    feedback
+  };
 }
 
 async function analyzeSideboard(sideboardCards, mainDeckAnalysis) {
@@ -354,9 +709,9 @@ async function analyzeSideboard(sideboardCards, mainDeckAnalysis) {
   return {
     cardCount: sideboardCards.length,
     validCardCount: validCards.length,
-    types: sideboardTypes,
-    synergies: sideboardSynergies,
-    colors: sideboardColors,
+    types: sideboardTypes.types,
+    synergies: sideboardSynergies.synergies,
+    colors: sideboardColors.colors,
     purposes: sideboardPurposes,
     strategy: sideboardStrategy,
     recommendations: generateSideboardRecommendations(sideboardPurposes, mainDeckAnalysis)
