@@ -393,3 +393,398 @@ function identifyKeyCards(cardData, archetype) {
     }
     
     // Only include non-land cards as "key cards" for display
+    if (!types.includes('land') && role !== 'Support') {
+      keyCards.push({
+        name: card.name,
+        role: role
+      });
+    }
+  });
+  
+  // Limit to most important cards (top 8-10)
+  return keyCards.slice(0, 10);
+}
+
+function analyzeDeckStrengths(cardData, basicAnalysis) {
+  const strengths = [];
+  const { archetype, synergies, cardTypes, manaCurve } = basicAnalysis;
+  
+  // Analyze based on archetype
+  if (archetype.includes('Aggro')) {
+    if (cardTypes.creatures >= 16) {
+      strengths.push("Strong creature density for consistent pressure");
+    }
+    
+    const lowCostCards = Object.entries(manaCurve).reduce((count, [cmc, num]) => {
+      return parseInt(cmc) <= 2 ? count + num : count;
+    }, 0);
+    
+    if (lowCostCards >= 20) {
+      strengths.push("Excellent early game curve for fast starts");
+    }
+  }
+  
+  if (archetype.includes('Control')) {
+    const interaction = cardTypes.instants + cardTypes.sorceries;
+    if (interaction >= 20) {
+      strengths.push("High density of interaction spells");
+    }
+    
+    if (synergies.includes('Card Draw')) {
+      strengths.push("Good card advantage engines");
+    }
+  }
+  
+  // General strengths
+  if (synergies.length >= 2) {
+    strengths.push(`Clear synergy focus: ${synergies.join(', ')}`);
+  }
+  
+  const colors = basicAnalysis.colors || [];
+  if (colors.length <= 2) {
+    strengths.push("Focused mana base should be consistent");
+  }
+  
+  // Check for removal density
+  const removalCount = cardData.filter(card => {
+    const text = card?.oracle_text?.toLowerCase() || '';
+    return text.includes('destroy') || text.includes('exile') || 
+           (text.includes('deal') && text.includes('damage'));
+  }).length;
+  
+  if (removalCount >= 6) {
+    strengths.push("Good removal suite for dealing with threats");
+  }
+  
+  return strengths;
+}
+
+function analyzeDeckWeaknesses(cardData, basicAnalysis) {
+  const weaknesses = [];
+  const { archetype, cardTypes, manaCurve } = basicAnalysis;
+  
+  // Mana base analysis
+  const totalCards = Object.values(manaCurve).reduce((sum, count) => sum + count, 0);
+  const landRatio = (cardTypes.lands / totalCards) * 100;
+  
+  if (landRatio < 35) {
+    weaknesses.push("Low land count may cause mana problems");
+  } else if (landRatio > 45) {
+    weaknesses.push("High land count may cause flooding");
+  }
+  
+  // Curve analysis
+  const avgCMC = Object.entries(manaCurve).reduce((sum, [cmc, count]) => {
+    return sum + (parseInt(cmc) * count);
+  }, 0) / Math.max(totalCards - cardTypes.lands, 1);
+  
+  if (avgCMC > 4 && !archetype.includes('Control')) {
+    weaknesses.push("High average mana cost may be too slow");
+  }
+  
+  // Archetype-specific weaknesses
+  if (archetype.includes('Aggro')) {
+    if (cardTypes.creatures < 14) {
+      weaknesses.push("Low creature count for an aggressive strategy");
+    }
+    
+    const highCostCards = Object.entries(manaCurve).reduce((count, [cmc, num]) => {
+      return parseInt(cmc) >= 5 ? count + num : count;
+    }, 0);
+    
+    if (highCostCards > 4) {
+      weaknesses.push("Too many expensive cards for aggressive deck");
+    }
+  }
+  
+  if (archetype.includes('Control')) {
+    const interaction = cardTypes.instants + cardTypes.sorceries;
+    if (interaction < 15) {
+      weaknesses.push("Low interaction count for control strategy");
+    }
+  }
+  
+  // Check for card draw
+  const cardDrawCount = cardData.filter(card => {
+    const text = card?.oracle_text?.toLowerCase() || '';
+    return text.includes('draw') && text.includes('card');
+  }).length;
+  
+  if (cardDrawCount < 3 && !archetype.includes('Aggro')) {
+    weaknesses.push("Limited card draw may cause card advantage problems");
+  }
+  
+  // Check color distribution for multicolor decks
+  const colors = basicAnalysis.colors || [];
+  if (colors.length >= 3) {
+    const basicLands = cardData.filter(card => {
+      const name = card?.name?.toLowerCase() || '';
+      return name.includes('plains') || name.includes('island') || 
+             name.includes('swamp') || name.includes('mountain') || 
+             name.includes('forest');
+    }).length;
+    
+    if (basicLands > 4) {
+      weaknesses.push("Basic lands may not support three+ color mana base");
+    }
+  }
+  
+  return weaknesses;
+}
+
+function analyzeConsistency(cardData, basicAnalysis) {
+  const { cardTypes, manaCurve } = basicAnalysis;
+  const totalCards = Object.values(manaCurve).reduce((sum, count) => sum + count, 0);
+  
+  // Land ratio
+  const landRatio = Math.round((cardTypes.lands / totalCards) * 100);
+  
+  // Curve quality assessment
+  let curveQuality = 'Good';
+  const lowCost = (manaCurve[1] || 0) + (manaCurve[2] || 0);
+  const midCost = (manaCurve[3] || 0) + (manaCurve[4] || 0);
+  const highCost = (manaCurve[5] || 0) + (manaCurve[6] || 0) + (manaCurve[7] || 0);
+  
+  if (lowCost < 8) {
+    curveQuality = 'Slow Start';
+  } else if (highCost > 8) {
+    curveQuality = 'Top Heavy';
+  } else if (lowCost >= 12 && midCost >= 8) {
+    curveQuality = 'Excellent';
+  }
+  
+  // Color balance
+  const colors = basicAnalysis.colors || [];
+  let colorBalance = 'Balanced';
+  
+  if (colors.length === 1) {
+    colorBalance = 'Mono-Color';
+  } else if (colors.length === 2) {
+    colorBalance = 'Two-Color';
+  } else if (colors.length >= 3) {
+    // Check for fixing lands
+    const fixingLands = cardData.filter(card => {
+      const text = card?.oracle_text?.toLowerCase() || '';
+      const name = card?.name?.toLowerCase() || '';
+      return text.includes('add') && text.includes('mana') && 
+             (text.includes('any color') || name.includes('pathway') || 
+              name.includes('triome') || name.includes('shock'));
+    }).length;
+    
+    if (fixingLands < colors.length) {
+      colorBalance = 'Needs Fixing';
+    } else {
+      colorBalance = 'Well-Fixed';
+    }
+  }
+  
+  return {
+    landRatio,
+    curveQuality,
+    colorBalance
+  };
+}
+
+async function analyzeSideboard(sideboardCards, mainDeckAnalysis) {
+  console.log(`Analyzing sideboard with ${sideboardCards.length} cards...`);
+  
+  if (sideboardCards.length === 0) {
+    return null;
+  }
+
+  // Fetch sideboard card data
+  const cardData = [];
+  for (let i = 0; i < sideboardCards.length; i++) {
+    const card = await fetchCardData(sideboardCards[i]);
+    cardData.push(card);
+    
+    // Small delay for API respect
+    if (i % 5 === 4) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+
+  const validCards = cardData.filter(Boolean);
+  console.log(`Successfully analyzed ${validCards.length} sideboard cards`);
+
+  // Analyze sideboard composition
+  const sideboardTypes = analyzeCardTypes(validCards);
+  const sideboardSynergies = detectSynergies(validCards);
+  const sideboardColors = getColorIdentity(validCards);
+  
+  // Categorize sideboard cards by purpose
+  const sideboardPurposes = categorizeSideboardCards(validCards);
+  
+  // Analyze sideboard strategy
+  const sideboardStrategy = analyzeSideboardStrategy(sideboardPurposes, mainDeckAnalysis);
+
+  return {
+    cardCount: sideboardCards.length,
+    validCardCount: validCards.length,
+    types: sideboardTypes,
+    synergies: sideboardSynergies,
+    colors: sideboardColors,
+    purposes: sideboardPurposes,
+    strategy: sideboardStrategy,
+    recommendations: generateSideboardRecommendations(sideboardPurposes, mainDeckAnalysis)
+  };
+}
+
+function categorizeSideboardCards(cardData) {
+  const purposes = {
+    removal: [],
+    counterspells: [],
+    graveyard_hate: [],
+    artifact_enchantment_hate: [],
+    hand_disruption: [],
+    card_draw: [],
+    threats: [],
+    protection: [],
+    combo_hate: [],
+    other: []
+  };
+
+  cardData.forEach(card => {
+    if (!card || !card.oracle_text) {
+      purposes.other.push(card?.name || 'Unknown');
+      return;
+    }
+
+    const text = card.oracle_text.toLowerCase();
+    const types = card.type_line?.toLowerCase() || '';
+    
+    // Removal
+    if (text.includes('destroy target creature') || 
+        text.includes('exile target creature') ||
+        text.includes('deal') && text.includes('damage')) {
+      purposes.removal.push(card.name);
+    }
+    // Counterspells
+    else if (text.includes('counter target spell')) {
+      purposes.counterspells.push(card.name);
+    }
+    // Graveyard hate
+    else if (text.includes('exile target card from a graveyard') ||
+             text.includes('graveyard') && text.includes('exile')) {
+      purposes.graveyard_hate.push(card.name);
+    }
+    // Artifact/Enchantment hate
+    else if (text.includes('destroy target artifact') ||
+             text.includes('destroy target enchantment')) {
+      purposes.artifact_enchantment_hate.push(card.name);
+    }
+    // Hand disruption
+    else if (text.includes('target opponent discards') ||
+             text.includes('look at target opponent\'s hand')) {
+      purposes.hand_disruption.push(card.name);
+    }
+    // Card draw
+    else if (text.includes('draw') && text.includes('card')) {
+      purposes.card_draw.push(card.name);
+    }
+    // Threats (creatures and planeswalkers)
+    else if (types.includes('creature') || types.includes('planeswalker')) {
+      purposes.threats.push(card.name);
+    }
+    // Protection
+    else if (text.includes('protection') || 
+             text.includes('hexproof') ||
+             text.includes('prevent')) {
+      purposes.protection.push(card.name);
+    }
+    // Combo hate
+    else if (text.includes('can\'t be cast') ||
+             text.includes('players can\'t') ||
+             text.includes('opponents can\'t')) {
+      purposes.combo_hate.push(card.name);
+    }
+    else {
+      purposes.other.push(card.name);
+    }
+  });
+
+  return purposes;
+}
+
+function analyzeSideboardStrategy(purposes, mainDeckAnalysis) {
+  const strategy = [];
+  
+  // Analyze what the sideboard is designed to handle
+  if (purposes.removal.length > 0) {
+    strategy.push(`Anti-creature strategy with ${purposes.removal.length} removal spells`);
+  }
+  
+  if (purposes.counterspells.length > 0) {
+    strategy.push(`Control elements with ${purposes.counterspells.length} counterspells`);
+  }
+  
+  if (purposes.hand_disruption.length > 0) {
+    strategy.push(`Hand disruption package with ${purposes.hand_disruption.length} discard effects`);
+  }
+  
+  if (purposes.graveyard_hate.length > 0) {
+    strategy.push(`Graveyard interaction with ${purposes.graveyard_hate.length} hate cards`);
+  }
+  
+  if (purposes.threats.length > 0) {
+    strategy.push(`Additional threats with ${purposes.threats.length} creatures/planeswalkers`);
+  }
+
+  // Analyze sideboard balance
+  const totalPurposefulCards = Object.values(purposes).flat().length - purposes.other.length;
+  const coverage = (totalPurposefulCards / Object.values(purposes).flat().length) * 100;
+  
+  if (coverage > 80) {
+    strategy.push("Well-focused sideboard with clear purposes for most cards");
+  } else if (coverage > 60) {
+    strategy.push("Moderately focused sideboard with some unclear inclusions");
+  } else {
+    strategy.push("Unfocused sideboard with many unclear card choices");
+  }
+
+  return strategy;
+}
+
+function generateSideboardRecommendations(purposes, mainDeckAnalysis) {
+  const recommendations = [];
+  const archetype = mainDeckAnalysis.archetype || '';
+  
+  // Archetype-specific recommendations
+  if (archetype.includes('Aggro')) {
+    if (purposes.removal.length < 2) {
+      recommendations.push("Aggro decks often benefit from 2-3 removal spells to deal with blockers");
+    }
+    if (purposes.hand_disruption.length < 2) {
+      recommendations.push("Consider hand disruption to fight combo and control decks");
+    }
+  } else if (archetype.includes('Control')) {
+    if (purposes.counterspells.length < 2) {
+      recommendations.push("Control decks typically want additional counterspells in the sideboard");
+    }
+    if (purposes.removal.length < 3) {
+      recommendations.push("More removal options can help against aggressive strategies");
+    }
+  } else if (archetype.includes('Midrange')) {
+    if (purposes.removal.length + purposes.counterspells.length < 4) {
+      recommendations.push("Midrange decks need flexible answers - consider more removal or counterspells");
+    }
+  }
+
+  // General sideboard health checks
+  const totalCards = Object.values(purposes).flat().length;
+  if (totalCards < 12) {
+    recommendations.push("Consider filling out your 15-card sideboard for more options");
+  }
+  
+  if (purposes.other.length > 3) {
+    recommendations.push("Some sideboard cards have unclear purposes - consider more focused choices");
+  }
+  
+  if (purposes.graveyard_hate.length === 0) {
+    recommendations.push("Consider adding graveyard hate for the current meta");
+  }
+
+  return recommendations;
+}
+
+export { analyzeMatchups, fetchCardData, analyzeSideboard, analyzeMainDeck };
