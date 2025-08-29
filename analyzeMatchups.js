@@ -41,11 +41,7 @@ async function fetchCardData(cardName) {
 }
 
 function computeManaCurve(cardData) {
-  // Initialize curve with all CMC values 0-7
-  const curveDist = {
-    0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0
-  };
-  
+  const curveDist = {};
   let creatures = 0;
   let nonCreatures = 0;
   let lands = 0;
@@ -88,7 +84,7 @@ function detectSynergies(cardData) {
   const synergies = [];
 
   // Lifegain synergies
-  if (allText.includes("lifelink") || (allText.includes("gain") && allText.includes("life"))) {
+  if (allText.includes("lifelink") || allText.includes("gain") && allText.includes("life")) {
     synergies.push("Lifegain");
   }
   
@@ -103,7 +99,7 @@ function detectSynergies(cardData) {
   }
   
   // Graveyard synergies
-  if (allText.includes("graveyard") || (allText.includes("return") && allText.includes("battlefield"))) {
+  if (allText.includes("graveyard") || allText.includes("return") && allText.includes("battlefield")) {
     synergies.push("Graveyard");
   }
   
@@ -163,13 +159,9 @@ function determineArchetype(colors, synergies, curve, cardTypes) {
   const safeCardTypes = cardTypes || {};
   const safeSynergies = synergies || [];
   
-  const totalNonLands = Object.entries(curveDist)
-    .filter(([cmc]) => parseInt(cmc) > 0)
-    .reduce((sum, [, count]) => sum + count, 0);
-  
-  const avgCMC = totalNonLands > 0 ? Object.entries(curveDist)
-    .filter(([cmc]) => parseInt(cmc) > 0)
-    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / totalNonLands : 0;
+  const totalCards = Object.values(curveDist).reduce((sum, count) => sum + count, 0);
+  const avgCMC = totalCards > 0 ? Object.entries(curveDist)
+    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / totalCards : 0;
 
   // Aggro decks: low mana curve, lots of creatures
   if (avgCMC <= 2.5 && safeCardTypes.creatures >= (safeCardTypes.instants + safeCardTypes.sorceries)) {
@@ -246,13 +238,9 @@ function generateRecommendations(analysis) {
   
   // Mana curve analysis
   const curveDist = manaCurve || {};
-  const totalNonlands = Object.entries(curveDist)
-    .filter(([cmc]) => parseInt(cmc) > 0)
-    .reduce((sum, [, count]) => sum + count, 0);
-  
-  const avgCMC = totalNonlands > 0 ? Object.entries(curveDist)
-    .filter(([cmc]) => parseInt(cmc) > 0)
-    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / totalNonlands : 0;
+  const totalNonlands = Object.values(curveDist).reduce((sum, count) => sum + count, 0) - (curveDist[0] || 0);
+  const avgCMC = Object.entries(curveDist)
+    .reduce((sum, [cmc, count]) => sum + (parseInt(cmc) * count), 0) / Math.max(totalNonlands, 1);
 
   recommendations.push(`Your average mana cost is ${avgCMC.toFixed(1)}.`);
 
@@ -289,15 +277,11 @@ function generateRecommendations(analysis) {
 async function analyzeMatchups(deckCards) {
   console.log(`Fetching data for ${deckCards.length} cards...`);
   
-  // Get unique cards first to avoid duplicate API calls
-  const uniqueCards = [...new Set(deckCards)];
-  console.log(`Fetching data for ${uniqueCards.length} unique cards...`);
-  
   // Fetch card data with some delay to respect rate limits
-  const uniqueCardData = [];
-  for (let i = 0; i < uniqueCards.length; i++) {
-    const card = await fetchCardData(uniqueCards[i]);
-    uniqueCardData.push(card);
+  const cardData = [];
+  for (let i = 0; i < deckCards.length; i++) {
+    const card = await fetchCardData(deckCards[i]);
+    cardData.push(card);
     
     // Small delay every 10 cards to be respectful to Scryfall API
     if (i % 10 === 9) {
@@ -305,17 +289,8 @@ async function analyzeMatchups(deckCards) {
     }
   }
 
-  // Create a mapping of card name to card data
-  const cardDataMap = new Map();
-  uniqueCards.forEach((cardName, index) => {
-    cardDataMap.set(cardName, uniqueCardData[index]);
-  });
-
-  // Rebuild the full deck with duplicates using the mapping
-  const fullDeckData = deckCards.map(cardName => cardDataMap.get(cardName));
-  
-  const validCards = fullDeckData.filter(Boolean);
-  console.log(`Successfully fetched data for ${validCards.length} total cards (${uniqueCards.length} unique)`);
+  const validCards = cardData.filter(Boolean);
+  console.log(`Successfully fetched data for ${validCards.length} cards`);
 
   // Safely compute analysis components
   const manaCurve = computeManaCurve(validCards);
@@ -343,221 +318,78 @@ async function analyzeMatchups(deckCards) {
   return analysis;
 }
 
-async function analyzeSideboard(sideboardCards, mainDeckAnalysis) {
-  console.log(`Analyzing sideboard with ${sideboardCards.length} cards...`);
+async function analyzeMainDeck(deckCards, basicAnalysis) {
+  console.log(`Performing detailed main deck analysis for ${deckCards.length} cards...`);
   
-  if (sideboardCards.length === 0) {
-    return null;
-  }
-
-  // Get unique sideboard cards
-  const uniqueSideboardCards = [...new Set(sideboardCards)];
-  console.log(`Analyzing ${uniqueSideboardCards.length} unique sideboard cards...`);
-
-  // Fetch sideboard card data
+  // Fetch detailed card data
   const cardData = [];
-  for (let i = 0; i < uniqueSideboardCards.length; i++) {
-    const card = await fetchCardData(uniqueSideboardCards[i]);
+  for (let i = 0; i < deckCards.length; i++) {
+    const card = await fetchCardData(deckCards[i]);
     cardData.push(card);
     
-    // Small delay for API respect
-    if (i % 5 === 4) {
+    if (i % 10 === 9) {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
 
-  // Create mapping for sideboard cards too
-  const sideboardCardDataMap = new Map();
-  uniqueSideboardCards.forEach((cardName, index) => {
-    sideboardCardDataMap.set(cardName, cardData[index]);
-  });
-
-  // Rebuild full sideboard with duplicates
-  const fullSideboardData = sideboardCards.map(cardName => sideboardCardDataMap.get(cardName));
-  const validCards = fullSideboardData.filter(Boolean);
-
-  console.log(`Successfully analyzed ${validCards.length} total sideboard cards`);
-
-  // Analyze sideboard composition
-  const sideboardTypes = analyzeCardTypes(validCards);
-  const sideboardSynergies = detectSynergies(validCards);
-  const sideboardColors = getColorIdentity(validCards);
+  const validCards = cardData.filter(Boolean);
   
-  // Categorize sideboard cards by purpose
-  const sideboardPurposes = categorizeSideboardCards(validCards);
+  // Calculate average CMC
+  const totalCMC = validCards.reduce((sum, card) => sum + (card.cmc || 0), 0);
+  const averageCMC = validCards.length > 0 ? (totalCMC / validCards.length).toFixed(2) : 0;
   
-  // Analyze sideboard strategy
-  const sideboardStrategy = analyzeSideboardStrategy(sideboardPurposes, mainDeckAnalysis);
+  // Identify key cards
+  const keyCards = identifyKeyCards(validCards, basicAnalysis.archetype);
+  
+  // Analyze strengths and weaknesses
+  const strengths = analyzeDeckStrengths(validCards, basicAnalysis);
+  const weaknesses = analyzeDeckWeaknesses(validCards, basicAnalysis);
+  
+  // Consistency analysis
+  const consistency = analyzeConsistency(validCards, basicAnalysis);
 
   return {
-    cardCount: sideboardCards.length,
+    cardCount: deckCards.length,
     validCardCount: validCards.length,
-    uniqueCardCount: uniqueSideboardCards.length,
-    types: sideboardTypes,
-    synergies: sideboardSynergies,
-    colors: sideboardColors,
-    purposes: sideboardPurposes,
-    strategy: sideboardStrategy,
-    recommendations: generateSideboardRecommendations(sideboardPurposes, mainDeckAnalysis)
+    averageCMC,
+    keyCards,
+    strengths,
+    weaknesses,
+    consistency,
+    // Include all basic analysis data
+    ...basicAnalysis
   };
 }
 
-function categorizeSideboardCards(cardData) {
-  const purposes = {
-    removal: [],
-    counterspells: [],
-    graveyard_hate: [],
-    artifact_enchantment_hate: [],
-    hand_disruption: [],
-    card_draw: [],
-    threats: [],
-    protection: [],
-    combo_hate: [],
-    other: []
-  };
-
+function identifyKeyCards(cardData, archetype) {
+  const keyCards = [];
+  
   cardData.forEach(card => {
-    if (!card || !card.oracle_text) {
-      purposes.other.push(card?.name || 'Unknown');
-      return;
-    }
-
-    const text = card.oracle_text.toLowerCase();
-    const types = card.type_line?.toLowerCase() || '';
+    if (!card) return;
     
-    // Removal
-    if (text.includes('destroy target creature') || 
-        text.includes('exile target creature') ||
-        (text.includes('deal') && text.includes('damage'))) {
-      purposes.removal.push(card.name);
+    const text = card.oracle_text?.toLowerCase() || '';
+    const types = card.type_line?.toLowerCase() || '';
+    let role = '';
+    
+    // Determine card role based on archetype and card properties
+    if (types.includes('planeswalker')) {
+      role = 'Win Condition';
+    } else if (text.includes('draw') && text.includes('card')) {
+      role = 'Card Draw';
+    } else if (text.includes('destroy') || text.includes('exile') || text.includes('damage')) {
+      role = 'Removal';
+    } else if (types.includes('creature') && (card.cmc >= 4 || (card.power && parseInt(card.power) >= 4))) {
+      role = 'Threat';
+    } else if (text.includes('counter') && text.includes('spell')) {
+      role = 'Counterspell';
+    } else if (types.includes('land')) {
+      role = 'Mana Base';
+    } else if (card.cmc <= 1 && types.includes('creature')) {
+      role = 'Early Game';
+    } else if (text.includes('protection') || text.includes('hexproof') || text.includes('indestructible')) {
+      role = 'Protection';
+    } else {
+      role = 'Support';
     }
-    // Counterspells
-    else if (text.includes('counter target spell')) {
-      purposes.counterspells.push(card.name);
-    }
-    // Graveyard hate
-    else if (text.includes('exile target card from a graveyard') ||
-             (text.includes('graveyard') && text.includes('exile'))) {
-      purposes.graveyard_hate.push(card.name);
-    }
-    // Artifact/Enchantment hate
-    else if (text.includes('destroy target artifact') ||
-             text.includes('destroy target enchantment')) {
-      purposes.artifact_enchantment_hate.push(card.name);
-    }
-    // Hand disruption
-    else if (text.includes('target opponent discards') ||
-             text.includes('look at target opponent\'s hand')) {
-      purposes.hand_disruption.push(card.name);
-    }
-    // Card draw
-    else if (text.includes('draw') && text.includes('card')) {
-      purposes.card_draw.push(card.name);
-    }
-    // Threats (creatures and planeswalkers)
-    else if (types.includes('creature') || types.includes('planeswalker')) {
-      purposes.threats.push(card.name);
-    }
-    // Protection
-    else if (text.includes('protection') || 
-             text.includes('hexproof') ||
-             text.includes('prevent')) {
-      purposes.protection.push(card.name);
-    }
-    // Combo hate
-    else if (text.includes('can\'t be cast') ||
-             text.includes('players can\'t') ||
-             text.includes('opponents can\'t')) {
-      purposes.combo_hate.push(card.name);
-    }
-    else {
-      purposes.other.push(card.name);
-    }
-  });
-
-  return purposes;
-}
-
-function analyzeSideboardStrategy(purposes, mainDeckAnalysis) {
-  const strategy = [];
-  
-  // Analyze what the sideboard is designed to handle
-  if (purposes.removal.length > 0) {
-    strategy.push(`Anti-creature strategy with ${purposes.removal.length} removal spells`);
-  }
-  
-  if (purposes.counterspells.length > 0) {
-    strategy.push(`Control elements with ${purposes.counterspells.length} counterspells`);
-  }
-  
-  if (purposes.hand_disruption.length > 0) {
-    strategy.push(`Hand disruption package with ${purposes.hand_disruption.length} discard effects`);
-  }
-  
-  if (purposes.graveyard_hate.length > 0) {
-    strategy.push(`Graveyard interaction with ${purposes.graveyard_hate.length} hate cards`);
-  }
-  
-  if (purposes.threats.length > 0) {
-    strategy.push(`Additional threats with ${purposes.threats.length} creatures/planeswalkers`);
-  }
-
-  // Analyze sideboard balance
-  const totalPurposefulCards = Object.values(purposes).flat().length - purposes.other.length;
-  const coverage = Object.values(purposes).flat().length > 0 ? 
-    (totalPurposefulCards / Object.values(purposes).flat().length) * 100 : 0;
-  
-  if (coverage > 80) {
-    strategy.push("Well-focused sideboard with clear purposes for most cards");
-  } else if (coverage > 60) {
-    strategy.push("Moderately focused sideboard with some unclear inclusions");
-  } else {
-    strategy.push("Unfocused sideboard with many unclear card choices");
-  }
-
-  return strategy;
-}
-
-function generateSideboardRecommendations(purposes, mainDeckAnalysis) {
-  const recommendations = [];
-  const archetype = mainDeckAnalysis.archetype || '';
-  
-  // Archetype-specific recommendations
-  if (archetype.includes('Aggro')) {
-    if (purposes.removal.length < 2) {
-      recommendations.push("Aggro decks often benefit from 2-3 removal spells to deal with blockers");
-    }
-    if (purposes.hand_disruption.length < 2) {
-      recommendations.push("Consider hand disruption to fight combo and control decks");
-    }
-  } else if (archetype.includes('Control')) {
-    if (purposes.counterspells.length < 2) {
-      recommendations.push("Control decks typically want additional counterspells in the sideboard");
-    }
-    if (purposes.removal.length < 3) {
-      recommendations.push("More removal options can help against aggressive strategies");
-    }
-  } else if (archetype.includes('Midrange')) {
-    if (purposes.removal.length + purposes.counterspells.length < 4) {
-      recommendations.push("Midrange decks need flexible answers - consider more removal or counterspells");
-    }
-  }
-
-  // General sideboard health checks
-  const totalCards = Object.values(purposes).flat().length;
-  if (totalCards < 12) {
-    recommendations.push("Consider filling out your 15-card sideboard for more options");
-  }
-  
-  if (purposes.other.length > 3) {
-    recommendations.push("Some sideboard cards have unclear purposes - consider more focused choices");
-  }
-  
-  if (purposes.graveyard_hate.length === 0) {
-    recommendations.push("Consider adding graveyard hate for the current meta");
-  }
-
-  return recommendations;
-}
-
-export { analyzeMatchups, fetchCardData, analyzeSideboard };
+    
+    // Only include non-land cards as "key cards" for display
