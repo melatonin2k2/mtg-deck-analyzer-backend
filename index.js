@@ -7,11 +7,18 @@ import { enhanceWithScryfall, recommendReplacements } from "./enhancers.js";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// FIXED CORS Configuration - Add your frontend URL
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://your-frontend-domain.com'],
-  credentials: true
+  origin: [
+    'http://localhost:3000',                                      // Local development
+    'https://mtg-deck-analyzer-frontend.onrender.com',           // Your production frontend
+    'https://mtg-deck-analyzer-frontend.onrender.com/'          // With trailing slash just in case
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
 
@@ -20,13 +27,16 @@ app.get("/api/health", (req, res) => {
   res.json({ 
     status: "OK", 
     timestamp: new Date().toISOString(),
-    message: "MTG Deck Analyzer Backend is running"
+    message: "MTG Deck Analyzer Backend is running",
+    cors: "Configured for production frontend"
   });
 });
 
 // Main deck analysis endpoint
 app.post("/api/analyze-deck", async (req, res) => {
   const { decklist } = req.body;
+  
+  console.log("Received analysis request from:", req.get('origin')); // Debug log
   
   if (!decklist) {
     return res.status(400).json({ 
@@ -186,4 +196,5 @@ app.listen(PORT, () => {
   console.log(`MTG Deck Analyzer Backend running on port ${PORT}`);
   console.log(`Health check available at: http://localhost:${PORT}/api/health`);
   console.log(`Deck analysis endpoint: http://localhost:${PORT}/api/analyze-deck`);
+  console.log(`CORS configured for frontend: https://mtg-deck-analyzer-frontend.onrender.com`);
 });
